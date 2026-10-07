@@ -7,9 +7,11 @@
   gap: 8px;
 }
 
+// Theme-aware: the grid is drawn with borders, and a white border on a white
+// background makes the whole thing invisible in light mode.
 .slot-cell {
   aspect-ratio: 1;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid;
   border-radius: 6px;
   display: flex;
   flex-direction: column;
@@ -19,21 +21,42 @@
   transition: border-color 120ms ease, background-color 120ms ease;
   overflow: hidden;
 
-  &:hover { border-color: rgba(255, 255, 255, 0.4); }
-  &.is-empty { opacity: 0.55; }
+  &.is-empty { opacity: 0.6; }
 
   // A queued edit is shown on the slot it affects, not only in a list.
   &.has-pending {
-    border-color: var(--q-warning);
+    border-color: var(--q-warning) !important;
     border-style: dashed;
-    background-color: rgba(242, 192, 55, 0.08);
+    background-color: rgba(242, 192, 55, 0.12);
   }
+}
+
+.body--light .slot-cell {
+  border-color: rgba(0, 0, 0, 0.18);
+  background-color: rgba(0, 0, 0, 0.02);
+
+  &:hover { border-color: rgba(0, 0, 0, 0.42); }
+  &.is-empty { background-color: transparent; }
+}
+
+.body--dark .slot-cell {
+  border-color: rgba(255, 255, 255, 0.16);
+  background-color: rgba(255, 255, 255, 0.03);
+
+  &:hover { border-color: rgba(255, 255, 255, 0.45); }
+  &.is-empty { background-color: transparent; }
 }
 
 .slot-item-name {
   font-size: 0.72rem;
-  line-height: 1.1;
+  line-height: 1.15;
   word-break: break-word;
+  // Long ids like Blueprint_Accessory_HeatColdResist_1_2 must not push the
+  // stack count out of the cell.
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .slot-count {
@@ -48,3 +71,5 @@
 }
 
 .stale-banner { border-left: 4px solid var(--q-warning); }
+
+.lock-code { white-space: nowrap; }

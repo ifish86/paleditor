@@ -29,18 +29,29 @@
           <div class="row q-col-gutter-md">
             <div v-if="!status.contentsOnly">
               <q-icon name="lock" size="14px" />
-              <span class="lock-code q-ml-xs">{{ chest.lock_code || 'no code' }}</span>
+              <!--
+                Three states, not two: a code set, lockable with no code, and
+                an object that cannot be locked at all.
+              -->
+              <span class="lock-code q-ml-xs">
+                {{ chest.lock_code || (chest.lockable ? 'unlocked' : 'no lock') }}
+              </span>
             </div>
             <div><q-icon name="place" size="14px" /> {{ coordinates(chest) }}</div>
-            <div>
+            <div v-if="chest.has_container">
               <q-icon name="inventory_2" size="14px" />
               {{ chest.filled_slots }}/{{ chest.slot_count }}
+            </div>
+            <div v-if="chest.object_type">
+              <q-icon name="category" size="14px" /> {{ chest.object_type }}
             </div>
             <div v-if="chest.base_name">
               <q-icon name="home" size="14px" /> {{ chest.base_name }}
             </div>
           </div>
-          <div class="q-mt-xs text-grey-7">{{ chest.container_guid }}</div>
+          <div v-if="chest.has_container" class="q-mt-xs text-grey-7">
+            {{ chest.container_guid }}
+          </div>
         </q-card-section>
       </q-card>
 
@@ -62,7 +73,17 @@
         change.
       </q-banner>
 
-      <SlotGrid :slots="chest.slots" @select="openEditor" />
+      <!--
+        A door carries a code but owns no container, so there is no grid to
+        draw and nothing to edit. It is still worth a page: the code is the
+        reason it is here.
+      -->
+      <q-banner v-if="!chest.has_container" dense class="bg-grey-9 text-white">
+        <template #avatar><q-icon name="door_front" /></template>
+        This object holds no items. It is listed because it carries a lock code.
+      </q-banner>
+
+      <SlotGrid v-else :slots="chest.slots" @select="openEditor" />
 
       <q-list v-if="chest.pending_edits.length" bordered class="q-mt-md">
         <q-item-label header>Queued for this chest</q-item-label>

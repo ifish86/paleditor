@@ -27,14 +27,21 @@ def schema_sql() -> str:
 
 def connect(path: str | Path, *, readonly: bool = False) -> sqlite3.Connection:
     path = Path(path)
+    # check_same_thread=False because FastAPI runs a sync dependency's setup and
+    # the endpoint body on different threadpool threads, so a per-request
+    # connection is opened on one thread and used on another. Concurrent
+    # requests make that routine; sequential ones hide it entirely. Each
+    # connection is still used by exactly one request at a time, and CPython's
+    # sqlite3 is built in serialized mode (threadsafety == 3), so this is safe.
     if readonly:
         conn = sqlite3.connect(
             f"file:{path}?mode=ro", uri=True, timeout=5.0,
             detect_types=sqlite3.PARSE_DECLTYPES,
+            check_same_thread=False,
         )
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path, timeout=30.0)
+        conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     if not readonly:

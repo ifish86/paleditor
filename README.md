@@ -23,11 +23,11 @@ Two things remain open:
   Oodle compressor is available. The maintenance window **refuses to run** until
   `paleditor check-write` has been run and its output shown to load on a copy of
   the world. See [docs/save-format.md](docs/save-format.md).
-- **The frontend has never been built or run.** It was written without Node
-  available, so it is unexercised source. Expect to fix things on the first
-  `quasar dev`.
+The frontend has been built and driven headlessly against the real world: sign
+in, browse bases, page through a chest list, open a 40-slot chest, queue an edit
+and see it land in the queue. Node 20 and npm 9 are enough.
 
-173 tests cover the config rules, the container and blob codecs, ingest, the
+177 tests cover the config rules, the container and blob codecs, ingest, the
 API, the RCON client, cron evaluation and the full maintenance sequence, none of
 which need the game installed.
 
@@ -107,6 +107,10 @@ npm install
 npx quasar dev     # proxies /api to 127.0.0.1:8080
 npx quasar build   # output lands in frontend/dist/spa, which the API serves
 ```
+
+`quasar.config.js` and `postcss.config.js` are CommonJS on purpose:
+`@quasar/app-vite` v1 requires them with Node directly and the package is not
+declared as an ES module. Everything under `src/` is ESM, which Vite handles.
 
 ## Commands
 

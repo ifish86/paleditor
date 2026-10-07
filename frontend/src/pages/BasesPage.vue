@@ -29,6 +29,9 @@
                 </div>
                 <div class="text-caption text-grey-6">
                   {{ base.chest_count }} chest{{ base.chest_count === 1 ? '' : 's' }}
+                  <span v-if="base.loot_count">
+                    · {{ base.loot_count }} loot
+                  </span>
                 </div>
               </div>
               <q-icon name="chevron_right" size="sm" color="grey-6" />
@@ -40,7 +43,7 @@
               v-if="!status.contentsOnly && base.locked_count"
               dense square size="sm" icon="lock" color="grey-8" text-color="white"
             >
-              {{ base.locked_count }} locked
+              {{ base.locked_count }} with codes
             </q-chip>
             <q-chip
               v-if="base.pending_chests"
@@ -81,9 +84,16 @@ const router = useRouter()
 const status = useStatusStore()
 
 // Chests out of range of any base camp are still reachable, as their own card.
+// The API returns only a count for it, not the per-base breakdown.
 const allCards = computed(() => {
   const cards = [...bases.value]
-  if (unassigned.value) cards.push({ ...unassigned.value, stale: false })
+  if (unassigned.value) {
+    cards.push({
+      locked_count: 0, pending_chests: 0, loot_count: 0,
+      ...unassigned.value,
+      stale: false,
+    })
+  }
   return cards
 })
 

@@ -1,9 +1,15 @@
 const routes = [
   {
     path: '/login',
-    name: 'login',
-    component: () => import('pages/LoginPage.vue'),
-    meta: { public: true },
+    component: () => import('layouts/BlankLayout.vue'),
+    children: [
+      {
+        path: '',
+        name: 'login',
+        component: () => import('pages/LoginPage.vue'),
+        meta: { public: true },
+      },
+    ],
   },
   {
     path: '/',
@@ -26,8 +32,14 @@ const routes = [
   },
   {
     path: '/:catchAll(.*)*',
-    component: () => import('pages/ErrorNotFound.vue'),
-    meta: { public: true },
+    component: () => import('layouts/BlankLayout.vue'),
+    children: [
+      {
+        path: '',
+        component: () => import('pages/ErrorNotFound.vue'),
+        meta: { public: true },
+      },
+    ],
   },
 ]
 

@@ -26,6 +26,10 @@
           {{ slot.display_name }}
         </template>
         <template v-else>
+          <!--
+            Empty slots are not stored in the save at all; the API fills the
+            grid out to the container's capacity so every slot is addressable.
+          -->
           <span class="text-grey-7">empty</span>
         </template>
       </div>

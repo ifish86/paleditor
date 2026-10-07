@@ -1,5 +1,4 @@
-import autoprefixer from 'autoprefixer'
-
-export default {
-  plugins: [autoprefixer],
+/* eslint-env node */
+module.exports = {
+  plugins: [require('autoprefixer')],
 }

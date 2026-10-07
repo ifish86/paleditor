@@ -24,14 +24,21 @@
       >
         <q-item-section>
           <q-item-label>
-            {{ chest.nickname || shortGuid(chest.container_guid) }}
+            {{ chest.nickname || chest.object_type || shortGuid(chest.container_guid) }}
+            <q-badge
+              v-if="chest.kind === 'lock-only'"
+              outline color="orange" label="door" class="q-ml-xs"
+            />
           </q-item-label>
           <q-item-label caption>
             {{ chest.base_name || 'Not near a base' }} ·
             <span v-if="!status.contentsOnly && chest.lock_code" class="lock-code">
               {{ chest.lock_code }} ·
             </span>
-            {{ chest.filled_slots }}/{{ chest.slot_count }}
+            <span v-if="chest.has_container">
+              {{ chest.filled_slots }}/{{ chest.slot_count }}
+            </span>
+            <span v-else>holds nothing</span>
           </q-item-label>
         </q-item-section>
         <q-item-section side>

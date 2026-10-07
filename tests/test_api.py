@@ -370,3 +370,23 @@ def test_search_results_say_what_kind_of_object_each_hit_is(friend_client):
     assert hits
     assert all("kind" in c for c in hits)
     assert {"storage", "lock-only"} & {c["kind"] for c in hits}
+
+
+def test_concurrent_requests_do_not_trip_sqlite_thread_checks(client, friend_client):
+    """Regression: FastAPI runs a sync dependency's setup and the endpoint body
+    on different threadpool threads, so a per-request connection is opened on
+    one thread and used on another.
+
+    Sequential requests hide this completely -- curl never saw it. A browser
+    loading the first screen fires several calls at once and every one of them
+    returned 500.
+    """
+    import concurrent.futures
+
+    paths = ["/api/bases", "/api/status", "/api/items", "/api/edits"] * 4
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda p: friend_client.get(p), paths))
+
+    bad = [(r.request.url.path, r.status_code, r.text[:160]) for r in results if r.status_code != 200]
+    assert not bad, f"concurrent requests failed: {bad}"

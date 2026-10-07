@@ -31,13 +31,18 @@ and see it land in the queue. Node 20 and npm 9 are enough.
 API, the RCON client, cron evaluation and the full maintenance sequence, none of
 which need the game installed.
 
-### Reading the save needs libooz
+### Reading the save needs an Oodle decompressor
 
-This server's saves use Oodle compression, which has no pure-Python decoder.
-paleditor loads a `libooz.so` build through ctypes. It is **not** vendored here:
-which build works depends on the host, and it is not ours to redistribute. Point
-`[palworld] oodle_library` at a local copy, or put one at
-`/opt/paleditor/lib/libooz.so`.
+These saves use Oodle compression, which has no pure-Python decoder, so
+paleditor loads a small native library through ctypes. It is not shipped here:
+upstream declares no licence, so it is not ours to redistribute. Build it:
+
+```bash
+scripts/oodle/build.sh --save-dir "/path/to/SaveGames/0/<world-id>"
+```
+
+That fetches a pinned commit, compiles a decompressor, verifies it against your
+save, and installs `lib/libooz.so`. See [docs/oodle.md](docs/oodle.md).
 
 ## Architecture
 

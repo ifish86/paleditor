@@ -2,12 +2,13 @@
 
 This server's saves use the PlM container, which is Oodle-compressed. There is
 no pure-Python decoder for it, so paleditor loads a shared library through
-ctypes. The ooz project (an open reimplementation) provides `ooz_decompress`;
-palstats ships a prebuilt `libooz.so` that works.
+ctypes and calls `ooz_decompress`.
 
-The library is NOT vendored in this repo: it is a third-party binary, and which
-build works depends on the host. Point [palworld] oodle_library at it, or drop
-it somewhere on the search path below.
+The library is not shipped with paleditor and is not vendored here. Its
+upstream, powzix/ooz, declares no licence, which under default copyright means
+it is not ours to redistribute in any form. `scripts/oodle/build.sh` fetches a
+pinned commit, builds a decompressor and verifies it against a real save before
+installing; see docs/oodle.md.
 
 Compression is deliberately not exposed. `OodLZ_Compress` is present in the
 library but segfaults when called, so paleditor writes the zlib (PlZ) container
@@ -25,13 +26,19 @@ from ..errors import ParserUnavailable
 
 log = logging.getLogger(__name__)
 
+def _repo_lib() -> Path:
+    """lib/libooz.so beside the source tree, where scripts/oodle/build.sh puts it."""
+    return Path(__file__).resolve().parents[3] / "lib" / "libooz.so"
+
+
 # Checked in order. The first that loads and exposes ooz_decompress wins.
+# These are all paleditor's own locations: nothing here depends on another
+# project being installed or on where somebody happened to put one.
 SEARCH_PATHS: tuple[Path, ...] = (
     Path("/opt/paleditor/lib/libooz.so"),
+    Path.home() / ".local" / "lib" / "libooz.so",
     Path("/usr/local/lib/libooz.so"),
     Path("/usr/lib/libooz.so"),
-    # palstats ships a working build; honour it when the two sit side by side.
-    Path(__file__).resolve().parents[3] / "palstats" / "libooz.so",
 )
 
 _cache: dict[str, "OodleLibrary"] = {}
@@ -81,7 +88,9 @@ class OodleLibrary:
 
 def load(explicit: str | os.PathLike[str] | None = None) -> OodleLibrary:
     """Find and load libooz, caching the result."""
-    candidates = [Path(explicit)] if explicit else list(SEARCH_PATHS)
+    candidates = (
+        [Path(explicit)] if explicit else [_repo_lib(), *SEARCH_PATHS]
+    )
     errors = []
     for candidate in candidates:
         key = str(candidate)
@@ -99,9 +108,16 @@ def load(explicit: str | os.PathLike[str] | None = None) -> OodleLibrary:
         _cache[key] = library
         return library
     raise ParserUnavailable(
-        "no usable Oodle library found, so PlM (Oodle) saves cannot be read.\n"
-        "Set [palworld] oodle_library to a libooz.so build, or place one at "
-        "/opt/paleditor/lib/libooz.so.\nTried:\n  " + "\n  ".join(errors)
+        "no usable Oodle library found, so this server's PlM (Oodle) saves "
+        "cannot be read.\n\n"
+        "Build one:\n"
+        "    scripts/oodle/build.sh\n\n"
+        "It fetches a pinned upstream commit, compiles a decompressor, checks "
+        "it against\nyour save, and installs it. paleditor cannot ship the "
+        "library itself: its upstream\ndeclares no licence, so it is not ours "
+        "to redistribute. See docs/oodle.md.\n\n"
+        "Or point [palworld] oodle_library at a build you already have.\n\n"
+        "Tried:\n  " + "\n  ".join(errors)
     )
 
 

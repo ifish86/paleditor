@@ -186,3 +186,46 @@ def test_binding_a_taken_port_raises_rather_than_starting_half_served():
             _bind(ListenAddress(host="127.0.0.1", port=port))
     finally:
         first.close()
+
+
+# -- the Oodle library lookup ----------------------------------------------
+
+
+def test_the_search_path_does_not_reach_into_another_project():
+    """paleditor used to fall back to a sibling palstats checkout.
+
+    That is somebody else's install layout: it broke the moment palstats was
+    moved, and it made a hard dependency look like it was satisfied.
+    """
+    from paleditor.saves import oodle
+
+    assert not any("palstats" in str(p) for p in oodle.SEARCH_PATHS)
+
+
+def test_every_search_path_belongs_to_paleditor():
+    from paleditor.saves import oodle
+
+    expected_roots = ("/opt/paleditor", "/usr/local/lib", "/usr/lib", ".local/lib")
+    for path in oodle.SEARCH_PATHS:
+        assert any(root in str(path) for root in expected_roots), path
+
+
+def test_the_repo_local_build_output_is_searched_first():
+    """scripts/oodle/build.sh installs into ./lib by default."""
+    from paleditor.saves import oodle
+
+    assert oodle._repo_lib().name == "libooz.so"
+    assert oodle._repo_lib().parent.name == "lib"
+
+
+def test_the_failure_says_how_to_get_one(tmp_path):
+    from paleditor.errors import ParserUnavailable
+    from paleditor.saves import oodle
+
+    with pytest.raises(ParserUnavailable) as caught:
+        oodle.load(tmp_path / "nope.so")
+    message = str(caught.value)
+    assert "scripts/oodle/build.sh" in message
+    # The reason it is not shipped matters: it is a licence problem, not an
+    # oversight somebody should fix by committing a binary.
+    assert "redistribute" in message

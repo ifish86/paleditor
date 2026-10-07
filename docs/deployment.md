@@ -29,6 +29,11 @@ git clone git@github.com:ifish86/paleditor.git /opt/paleditor
 cd /opt/paleditor
 python3 -m venv .venv
 .venv/bin/pip install -e '.[parser]'
+
+# The Oodle decompressor. Not shipped: upstream declares no licence, so
+# paleditor builds it rather than redistributing it. See docs/oodle.md.
+scripts/oodle/build.sh --prefix /opt/paleditor/lib \
+  --save-dir "/home/palworld/palworld-server/Pal/Saved/SaveGames/0/<world-id>"
 ```
 
 Build the frontend, which the API then serves from `frontend/dist/spa`:

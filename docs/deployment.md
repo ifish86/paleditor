@@ -1,0 +1,159 @@
+# Deployment
+
+paleditor runs on the same VPS as the game server, as a systemd unit beside it.
+It needs read and write access to the save directory, permission to start and
+stop the game unit, and an RCON connection on localhost.
+
+## Install
+
+```bash
+# A dedicated user that shares the game's group for save access.
+useradd --system --home /opt/paleditor --shell /usr/sbin/nologin paleditor
+usermod -aG palworld paleditor
+
+install -d -o paleditor -g paleditor /opt/paleditor /var/lib/paleditor
+install -d -o paleditor -g paleditor /var/lib/paleditor/backups
+install -d -o root -g paleditor -m 750 /etc/paleditor
+
+git clone git@github.com:ifish86/paleditor.git /opt/paleditor
+cd /opt/paleditor
+python3 -m venv .venv
+.venv/bin/pip install -e '.[parser]'
+```
+
+Build the frontend, which the API then serves from `frontend/dist/spa`:
+
+```bash
+cd frontend && npm ci && npx quasar build
+```
+
+## Configure
+
+```bash
+cp config/paleditor.example.toml /etc/paleditor/paleditor.toml
+
+# Two passwords: one for the friend group, one for the owner.
+.venv/bin/paleditor hash-password      # -> auth.password_hash
+.venv/bin/paleditor hash-password      # -> auth.owner_password_hash
+
+# The RCON password lives in its own file so the main config can stay
+# group-readable while the secret does not.
+printf '%s' 'your-rcon-password' > /etc/paleditor/rcon.secret
+chown root:paleditor /etc/paleditor/rcon.secret
+chmod 600 /etc/paleditor/rcon.secret
+
+.venv/bin/paleditor check-config -c /etc/paleditor/paleditor.toml
+```
+
+`check-config` refuses anything unsafe and prints the next scheduled window, so
+run it before every restart.
+
+## Permission to stop and start the game
+
+The window needs `systemctl start/stop` on one unit, and nothing more. Grant
+exactly that with a polkit rule rather than full sudo:
+
+```javascript
+// /etc/polkit-1/rules.d/50-paleditor.rules
+polkit.addRule(function (action, subject) {
+  if (action.id === "org.freedesktop.systemd1.manage-units" &&
+      subject.user === "paleditor") {
+    var unit = action.lookup("unit");
+    if (unit === "palworld.service") {
+      var verb = action.lookup("verb");
+      if (verb === "start" || verb === "stop" || verb === "status") {
+        return polkit.Result.YES;
+      }
+    }
+  }
+  return polkit.Result.NOT_HANDLED;
+});
+```
+
+## Run
+
+```bash
+cp config/paleditor.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now paleditor
+journalctl -u paleditor -f
+```
+
+Edit `ReadWritePaths` in the unit if the save directory is not under
+`/home/palworld/Pal/Saved/SaveGames`.
+
+### Listening on more than one address
+
+The example config lists two addresses, loopback and a VPN address. uvicorn
+binds one address per process, so `paleditor serve` uses the first entry and
+says so on stderr. For both, either run a second unit with a config whose
+`listen` starts with the other address, or put a reverse proxy in front. The
+config still validates every entry, so a public address is refused in either
+case unless `allow_public` is true.
+
+## First ingest
+
+```bash
+sudo -u paleditor /opt/paleditor/.venv/bin/paleditor \
+  -c /etc/paleditor/paleditor.toml ingest
+```
+
+Reading a save file while the server is writing it is a real hazard. Until
+that question is settled (it is open in the proposal), run the first ingest
+while the server is stopped, and let the window's step 7 handle reingests
+afterwards.
+
+Measure the parse. If it exceeds the window, move to an incremental reader
+before adding features.
+
+## Restore from a backup
+
+Test this once, before anyone else uses the app. The window writes a
+timestamped copy and a checksum to `backup_dir` before every change.
+
+```bash
+systemctl stop palworld
+cd /var/lib/paleditor/backups
+ls -t Level-*.sav | head
+
+# Verify the copy before trusting it.
+sha256sum -c Level-20261007T050000Z.sav.sha256
+
+SAVE=/home/palworld/Pal/Saved/SaveGames/0/<world-id>
+cp -a "$SAVE/Level.sav" "$SAVE/Level.sav.broken"
+cp Level-20261007T050000Z.sav "$SAVE/Level.sav"
+chown palworld:palworld "$SAVE/Level.sav"
+
+systemctl start palworld
+```
+
+Then reingest so the database matches what the world now holds:
+
+```bash
+sudo -u paleditor /opt/paleditor/.venv/bin/paleditor \
+  -c /etc/paleditor/paleditor.toml ingest
+```
+
+## Backing up what ingest cannot rebuild
+
+`chest_meta` and `pending_edits` are app-owned: they are never derived from the
+save and no reparse can reconstruct them. The rest of the database is
+disposable.
+
+```bash
+sqlite3 /var/lib/paleditor/paleditor.db \
+  ".dump chest_meta pending_edits" > /var/backups/paleditor-meta.sql
+```
+
+## Operating notes
+
+- **A game update that moves the save layout** shows as a failed ingest. The
+  app keeps serving the last good rev with a warning banner, and the write path
+  refuses until an ingest passes.
+- **A window that fails** leaves its edits `queued` for the next one, unless
+  the write itself landed, in which case the backup is restored and the batch
+  is marked `failed` with the reason.
+- **`window_in_progress`** in `/api/status` reflects the lockfile, so a manual
+  run requested during the scheduled one gets a clear 409.
+- **A failed edit is never retried silently.** It keeps its error text and
+  stays visible in the queue.

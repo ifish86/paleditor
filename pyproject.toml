@@ -1,0 +1,34 @@
+[project]
+name = "paleditor"
+version = "0.1.0"
+description = "Read-mostly web app over a Palworld dedicated server save, with a gated write path"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "argon2-cffi>=23.1",
+]
+
+[project.optional-dependencies]
+# The real save parser. Kept optional so the app installs and the test suite
+# runs without it; see docs/save-format.md for why this is pinned loosely.
+parser = ["palworld-save-tools>=0.24.0"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+paleditor = "paleditor.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+paleditor = ["schema.sql", "data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning"]

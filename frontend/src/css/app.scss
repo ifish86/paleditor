@@ -1,0 +1,50 @@
+// Mobile-first: most lookups happen on a phone with the game running on
+// another machine.
+
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+
+.slot-cell {
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 6px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+  overflow: hidden;
+
+  &:hover { border-color: rgba(255, 255, 255, 0.4); }
+  &.is-empty { opacity: 0.55; }
+
+  // A queued edit is shown on the slot it affects, not only in a list.
+  &.has-pending {
+    border-color: var(--q-warning);
+    border-style: dashed;
+    background-color: rgba(242, 192, 55, 0.08);
+  }
+}
+
+.slot-item-name {
+  font-size: 0.72rem;
+  line-height: 1.1;
+  word-break: break-word;
+}
+
+.slot-count {
+  font-size: 0.9rem;
+  font-weight: 600;
+  align-self: flex-end;
+}
+
+.lock-code {
+  font-family: 'Roboto Mono', monospace;
+  letter-spacing: 0.08em;
+}
+
+.stale-banner { border-left: 4px solid var(--q-warning); }

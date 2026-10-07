@@ -1,0 +1,42 @@
+# paleditor, running beside the game server on the same VPS.
+#
+#   install -d -o paleditor -g paleditor /var/lib/paleditor
+#   cp config/paleditor.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now paleditor
+
+[Unit]
+Description=paleditor (Palworld chest browser)
+Documentation=https://github.com/ifish86/paleditor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paleditor
+# Needs to read and write the save directory, so it shares the game's group.
+SupplementaryGroups=palworld
+WorkingDirectory=/opt/paleditor
+ExecStart=/opt/paleditor/.venv/bin/paleditor serve -c /etc/paleditor/paleditor.toml
+Restart=on-failure
+RestartSec=5
+
+# The window stops and starts the game unit. Grant exactly that, and nothing
+# more, with a polkit rule rather than full sudo; see docs/deployment.md.
+StateDirectory=paleditor
+RuntimeDirectory=paleditor
+
+# Hardening. The save directory is the only path outside its own state that
+# paleditor needs to write.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/paleditor /home/palworld/Pal/Saved/SaveGames
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

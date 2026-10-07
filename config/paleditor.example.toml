@@ -1,0 +1,44 @@
+# paleditor configuration.
+#
+# Copy to /etc/paleditor/paleditor.toml and edit. Validate before restarting:
+#     paleditor check-config -c /etc/paleditor/paleditor.toml
+#
+# The loader refuses to start on anything unsafe rather than falling back to a
+# permissive default, because the write path can modify the world.
+
+[server]
+# One entry per interface to listen on.
+# 127.0.0.1 is local only; a VPN address exposes it to the friend group.
+listen = ["127.0.0.1:8080", "100.64.0.3:8080"]
+allow_public = false   # must be true to bind 0.0.0.0 or a WAN address
+
+[auth]
+# Generate with: paleditor hash-password
+# There is no default password and no first-run open window.
+password_hash = "$argon2id$v=19$m=65536,t=3,p=4$REPLACE-ME"
+owner_password_hash = "$argon2id$v=19$m=65536,t=3,p=4$REPLACE-ME-TOO"
+session_days = 30
+
+[palworld]
+save_dir = "/home/palworld/Pal/Saved/SaveGames/0/<world-id>"
+server_unit = "palworld.service"
+rcon_host = "127.0.0.1"
+rcon_port = 25575
+rcon_password_file = "/etc/paleditor/rcon.secret"
+# "cheahjs" is the real parser; "fixture" reads a JSON dump and is for
+# development only.
+save_backend = "cheahjs"
+
+[maintenance]
+schedule = "0 5 * * *"
+shutdown_warning_seconds = 60
+backup_dir = "/var/lib/paleditor/backups"
+backup_count = 10
+# How long to wait for the server process to actually exit after the countdown.
+# The window does not trust the countdown; it polls for the PID to disappear.
+shutdown_timeout_seconds = 180
+enabled = true
+lock_file = "/var/lib/paleditor/maintenance.lock"
+
+[database]
+path = "/var/lib/paleditor/paleditor.db"

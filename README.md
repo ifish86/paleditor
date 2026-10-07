@@ -99,8 +99,33 @@ CONF
 The API is then on <http://127.0.0.1:8080>, with docs at `/docs`. Sign in with
 `friendpw`, or `ownerpw` for the owner-gated endpoints.
 
-`check-config` prints every path it resolved, including the maintenance lock,
-which defaults to sitting beside the database.
+`check-config` prints every path it resolved, including the maintenance lock
+(which defaults to sitting beside the database) and the directory the running
+code was imported from.
+
+### If you moved or copied the project
+
+**A virtualenv is not relocatable.** `.venv/bin/paleditor` has the original
+interpreter's absolute path in its shebang, and an editable install records the
+original `src/` directory in a `.pth` file. Copy a project with its `.venv`
+into a new home and it keeps running the *old* source tree — so edits and
+`git pull` appear to do nothing.
+
+Check which code is actually running:
+
+```bash
+.venv/bin/paleditor --version
+```
+
+If that path is not inside the directory you are standing in, rebuild the venv:
+
+```bash
+cd ~/paleditor
+rm -rf .venv
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/paleditor --version    # should now point at this directory
+```
 
 ### The frontend
 

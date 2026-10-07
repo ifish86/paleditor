@@ -19,6 +19,13 @@ from . import __version__
 DEFAULT_CONFIG = Path("/etc/paleditor/paleditor.toml")
 
 
+def _package_dir() -> Path:
+    """Where the running paleditor package was imported from."""
+    import paleditor
+
+    return Path(paleditor.__file__).resolve().parent
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -45,7 +52,16 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="paleditor",
         description="Browse and queue edits against a Palworld server save.",
     )
-    parser.add_argument("--version", action="version", version=f"paleditor {__version__}")
+    # The install path is in here because a copied virtualenv is not
+    # relocatable: its launcher shebang and its editable-install path file both
+    # hold absolute paths, so a project copied to a new directory keeps running
+    # the original source tree. Printing where the code came from turns a
+    # baffling "my fix did nothing" into an obvious one.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"paleditor {__version__} (from {_package_dir()})",
+    )
     # Accepted before the subcommand as well as after it, because both orders
     # are natural to type and argparse only supports one by default.
     parser.add_argument(
@@ -226,6 +242,7 @@ def _hash_password(args) -> int:
 def _check_config(args) -> int:
     config = _load(args, check_paths=not args.skip_paths)
     print(f"{_config_path(args)}: ok")
+    print(f"  code         : {_package_dir()}")
     print(f"  listen       : {', '.join(str(a) for a in config.server.listen)}")
     print(f"  allow_public : {config.server.allow_public}")
     print(f"  save_dir     : {config.palworld.save_dir}")

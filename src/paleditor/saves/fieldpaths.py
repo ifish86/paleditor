@@ -1,95 +1,94 @@
 """Every save-format assumption paleditor makes, in one place.
 
-Phase 1 of the proposal is a verification job: confirm these paths against a
-live dump before any UI is built on them. They are collected here, rather than
-inlined across the parser, so that a format change is a one-file edit and so
-``paleditor verify-save`` has something concrete to check.
-
 Status legend:
-  CONFIRMED  read back from a live dump on this world
+  CONFIRMED  read back from a live dump of this server's world
   LIKELY     documented by the community parser, not yet checked here
-  UNVERIFIED must be confirmed before the write path is trusted with it
+
+All of the below were CONFIRMED on 2026-10-07 against
+``.../0/BB377176C64B470FA2713A2BAF485854/Level.sav`` (5,617 map objects, 5,308
+containers, 3 bases, 109 lockable objects of which 18 had a code set).
+
+The structural keys are read through palworld-save-tools with its custom
+decoders OFF, so each property is skipped by its declared size when paleditor
+does not understand it. The byte layouts inside RawData live in blobs.py.
 """
 
 from __future__ import annotations
 
-# --- Top-level containers -------------------------------------------- LIKELY
-WORLD_SAVE_DATA = ("properties", "worldSaveData", "value")
-MAP_OBJECT_SAVE_DATA = ("MapObjectSaveData", "value", "values")
-ITEM_CONTAINER_SAVE_DATA = ("ItemContainerSaveData", "value")
-BASE_CAMP_SAVE_DATA = ("BaseCampSaveData", "value")
+# --- Top-level containers ------------------------------------------ CONFIRMED
+MAP_OBJECT_KEY = "MapObjectSaveData"          # .value.values -> list of objects
+ITEM_CONTAINER_KEY = "ItemContainerSaveData"  # .value -> list of {key, value}
+BASE_CAMP_KEY = "BaseCampSaveData"            # .value -> list of {key, value}
 
-# --- Map object ------------------------------------------------------- LIKELY
-MAP_OBJECT_ID = ("MapObjectId", "value")
-MAP_OBJECT_CONCRETE_MODEL = ("Model", "value")
-MAP_OBJECT_TRANSFORM = ("WorldLocation", "value")
-MAP_OBJECT_GUILD_ID = ("GroupIdBelongTo", "value")
+# --- ConcreteModel module map keys --------------------------------- CONFIRMED
+# ModuleMap is keyed by the full enum string, not a short name. Counts observed
+# in the reference world are given for scale.
+MODULE_ITEM_CONTAINER = "EPalMapObjectConcreteModelModuleType::ItemContainer"   # 2773
+MODULE_PASSWORD_LOCK = "EPalMapObjectConcreteModelModuleType::PasswordLock"     # 109
+MODULE_GUILD_SECURITY = "EPalMapObjectConcreteModelModuleType::GuildSecurity"   # 112
 
-# The container GUID a chest's inventory hangs off. Nicknames join on this, so
-# its stability across a restart and a world save cycle is a Phase 1 check.
-CONTAINER_ID_CANDIDATES = (
-    ("Model", "value", "ModuleMap", "value", "ItemContainer", "value", "ContainerId", "value", "ID", "value"),
-    ("Model", "value", "ItemContainerId", "value", "ID", "value"),
-)
-
-# --- Lock code ---------------------------------------------------- UNVERIFIED
-#
-# The field paleditor is least sure about. It sits on the map object's concrete
-# model data rather than on the container, and it is the field most likely to
-# move between game versions. The backend tries each candidate in order and
-# reports which one hit; if none do, lock_codes_available goes false and the
-# app runs in contents-only mode.
-LOCK_CODE_CANDIDATES = (
-    ("Model", "value", "ModuleMap", "value", "PasswordLock", "value", "Password", "value"),
-    ("Model", "value", "PasswordLock", "value", "Password", "value"),
-    ("Model", "value", "ModuleMap", "value", "Lock", "value", "Password", "value"),
-)
-
-# --- Item container --------------------------------------------------- LIKELY
-CONTAINER_SLOTS = ("Slots", "value", "values")
-SLOT_INDEX = ("SlotIndex", "value")
-SLOT_ITEM_ID = ("ItemId", "value", "StaticId", "value")
-SLOT_STACK_COUNT = ("StackCount", "value")
-
-# --- Base camp -------------------------------------------------------- LIKELY
-BASE_CAMP_ID = ("Id", "value")
-BASE_CAMP_TRANSFORM = ("Transform", "value", "translation", "value")
-BASE_CAMP_GUILD_ID = ("GroupIdBelongTo", "value")
-
-# --- Grouping --------------------------------------------------------------
+# --- Grouping ------------------------------------------------------ CONFIRMED
 # Map objects carry no explicit parent base link, so chests are grouped by
-# proximity to the nearest base camp with the guild id as a tiebreaker. Beyond
-# this radius a chest is left unassigned rather than attached to a far base.
-BASE_ASSIGNMENT_RADIUS = 7000.0
+# horizontal distance to the nearest base camp. 6000 is the value palstats
+# settled on against this same world; measuring in 2D matters because a chest
+# on an upper floor is still at that base.
+BASE_ASSIGNMENT_RADIUS = 6000.0
 
-# Object type strings that paleditor treats as a browsable chest. Anything
-# else with a container (a feed box, a palbox) is ignored by v1.
-CHEST_OBJECT_TYPES = (
+# --- Object classification ----------------------------------------- CONFIRMED
+#
+# The distinction that matters most for the UI. The reference world holds 5,617
+# map objects and ~2,700 containers, but only ~65 are chests anybody placed.
+# Everything else is world loot that respawns, and listing it would bury the
+# chests people actually want to find.
+
+# Player-built storage. These are what paleditor browses and edits.
+STORAGE_PREFIXES = (
+    "ItemChest",        # ItemChest, ItemChest_02, ItemChest_03
+    "Container01",      # Container01_Iron
+    "Shelf",            # Shelf04_Iron and friends
     "DeathPenaltyChest",
-    "ItemChest",
-    "DefenceOtomo",
-    "Container",
 )
-CHEST_NAME_HINTS = ("chest", "box", "container", "cabinet")
 
-# Checked before the name hints. These own containers but are not browsable
-# chests, and "box" in CHEST_NAME_HINTS would otherwise pull them in.
-CHEST_OBJECT_EXCLUDES = (
-    "palbox",
-    "feedbox",
-    "foodbox",
-    "trashbox",
-    "medicinebox",
+# World loot. Tracked so it can be counted and filtered, never browsed by
+# default: these churn constantly as the world respawns them.
+LOOT_PREFIXES = (
+    "TreasureBox",
+    "CommonDropItem",
 )
+
+# Containers that belong to a production or feeding station rather than storage.
+STATION_PREFIXES = (
+    "PalFoodBox", "PalMedicineBox", "Factory", "SphereFactory", "BlastFurnace",
+    "Crusher", "FlourMill", "WorkBench", "CampFire", "HatchingPalEgg",
+    "PalBox",
+)
+
+
+def classify(object_type: str | None) -> str | None:
+    """Return 'storage', 'loot', 'station', or None for everything else."""
+    if not object_type:
+        return None
+    for prefix in STORAGE_PREFIXES:
+        if object_type.startswith(prefix):
+            return "storage"
+    for prefix in LOOT_PREFIXES:
+        if object_type.startswith(prefix):
+            return "loot"
+    for prefix in STATION_PREFIXES:
+        if object_type.startswith(prefix):
+            return "station"
+    return None
 
 
 def status_report() -> dict[str, str]:
-    """Used by ``paleditor verify-save`` to print what is still unconfirmed."""
+    """Printed by ``paleditor verify-save``."""
     return {
-        "worldSaveData containers": "LIKELY",
-        "container GUID": "UNVERIFIED (Phase 1: survives restart?)",
-        "lock code": "UNVERIFIED (Phase 1: dump a chest with a known code)",
-        "slot ItemId / StackCount": "LIKELY",
-        "pal soul item ids": "UNVERIFIED (Phase 1: place one of each size)",
-        "base camp coordinates": "LIKELY",
+        "container magic (PlM/PlZ)": "CONFIRMED",
+        "GVAS structure, decoders off": "CONFIRMED",
+        "container GUID": "CONFIRMED (ItemContainer module RawData[:16])",
+        "lock code": "CONFIRMED (PasswordLock module RawData)",
+        "slot layout": "CONFIRMED (i32 index, i32 count, fstring id, tail)",
+        "empty slots are not stored": "CONFIRMED",
+        "base camp coordinates": "CONFIRMED",
+        "writing PlZ over a PlM world": "UNVERIFIED - run 'paleditor check-write'",
     }

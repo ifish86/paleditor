@@ -94,7 +94,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Phase 1: check the save-format assumptions against a real save",
     )
     p.add_argument("--save-dir", type=Path, required=True)
-    p.add_argument("--backend", default="cheahjs", choices=["cheahjs", "fixture"])
+    p.add_argument("--backend", default="palworld", choices=["palworld", "fixture"])
+    p.add_argument("--oodle-library", type=Path, default=None)
     p.set_defaults(handler=_verify_save)
 
     p = sub.add_parser(
@@ -102,10 +103,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Phase 1: print one chest's raw slots, to read item ids back",
     )
     p.add_argument("--save-dir", type=Path, required=True)
-    p.add_argument("--backend", default="cheahjs", choices=["cheahjs", "fixture"])
+    p.add_argument("--backend", default="palworld", choices=["palworld", "fixture"])
+    p.add_argument("--oodle-library", type=Path, default=None)
     p.add_argument("container_guid", nargs="?",
                    help="omit to list every chest found")
     p.set_defaults(handler=_dump_chest)
+
+    p = sub.add_parser(
+        "check-write",
+        help="produce a rewritten save, to test the container swap on a COPY",
+    )
+    p.add_argument("--save-dir", type=Path, required=True)
+    p.add_argument("--out", type=Path, required=True,
+                   help="where to write the rewritten Level.sav")
+    p.add_argument("--oodle-library", type=Path, default=None)
+    p.set_defaults(handler=_check_write)
 
     p = with_config(sub.add_parser("init-db", help="create the database schema"))
     p.set_defaults(handler=_init_db)
@@ -232,8 +244,12 @@ def _verify_save(args) -> int:
     """Phase 1. Nothing downstream should be built until this passes."""
     from .saves import get_backend
     from .saves.fieldpaths import status_report
+    from .savesource import pick
 
-    backend = get_backend(args.backend)
+    backend = (
+        get_backend("palworld", oodle_library=getattr(args, "oodle_library", None))
+        if args.backend == "palworld" else get_backend(args.backend)
+    )
     if not backend.available():
         print(
             f"the {args.backend} backend is not installed; "
@@ -242,12 +258,9 @@ def _verify_save(args) -> int:
         )
         return 1
 
-    level = args.save_dir / "Level.sav"
-    if not level.is_file():
-        print(f"{level} does not exist", file=sys.stderr)
-        return 1
-
-    print(f"parsing {level} with the {backend.name} backend…")
+    source = pick(args.save_dir, prefer_backup=True)
+    level = source.level_sav
+    print(f"parsing {level} ({source.label}) with the {backend.name} backend…")
     snapshot = backend.read_snapshot(level)
 
     print(f"\nbases   : {len(snapshot.bases)}")
@@ -294,12 +307,16 @@ def _verify_save(args) -> int:
 def _dump_chest(args) -> int:
     """Phase 1. Read item ids back from a container instead of guessing them."""
     from .saves import get_backend
+    from .savesource import pick
 
-    backend = get_backend(args.backend)
+    backend = (
+        get_backend("palworld", oodle_library=getattr(args, "oodle_library", None))
+        if args.backend == "palworld" else get_backend(args.backend)
+    )
     if not backend.available():
         print(f"the {args.backend} backend is not installed", file=sys.stderr)
         return 1
-    snapshot = backend.read_snapshot(args.save_dir / "Level.sav")
+    snapshot = backend.read_snapshot(pick(args.save_dir, prefer_backup=True).level_sav)
 
     if not args.container_guid:
         for chest in snapshot.chests:
@@ -337,6 +354,61 @@ def _dump_chest(args) -> int:
         "\nCopy any new item ids into src/paleditor/data/items.json with "
         'provenance "confirmed"; the seeder never overwrites those.',
         file=sys.stderr,
+    )
+    return 0
+
+
+def _check_write(args) -> int:
+    """Rewrite the save unchanged, so the container swap can be tested safely.
+
+    This server's world uses the Oodle (PlM) container. No working Oodle
+    compressor is available, so paleditor writes the zlib (PlZ) container
+    instead. Whether Palworld loads a PlZ save in place of a PlM one is the one
+    thing paleditor cannot determine on its own, and the whole write path
+    depends on it. This command makes the file; loading it is your step.
+    """
+    from .saves import container, get_backend
+    from .savesource import pick
+
+    source = pick(args.save_dir, prefer_backup=True)
+    print(f"reading {source.level_sav} ({source.label})")
+    raw = source.level_sav.read_bytes()
+    box = container.read(raw, path=source.level_sav, oodle_library=args.oodle_library)
+    print(f"  container {box.magic.decode()} type 0x{box.save_type:02x}, "
+          f"{len(box.gvas):,} bytes of GVAS")
+
+    backend = get_backend("palworld", oodle_library=args.oodle_library)
+    if not backend.available():
+        print("the palworld backend is unavailable", file=sys.stderr)
+        return 1
+
+    # No edits: the output differs from the input only by its container, which
+    # isolates the question being asked.
+    report = backend.apply_edits(source.level_sav, args.out, [])
+    assert not report.failed
+    written = args.out.stat().st_size
+    print(f"  wrote {args.out} ({written:,} bytes, was {len(raw):,})")
+
+    rewritten = container.read(args.out.read_bytes(), path=args.out)
+    identical = rewritten.gvas == box.gvas
+    print(f"  re-read as {rewritten.magic.decode()}; "
+          f"GVAS identical to the original: {identical}")
+    if not identical:
+        print(
+            "\nThe round-trip changed the world data. Do NOT load this save.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        "\nThe payload survived the round-trip byte for byte, so only the\n"
+        "container changed. Now the part paleditor cannot test:\n"
+        f"\n  1. Stop the server and back up {source.level_sav.name}\n"
+        f"  2. Copy {args.out} over it\n"
+        "  3. Start the server and confirm the world loads with everything intact\n"
+        "  4. Restore your backup afterwards\n"
+        "\nDo this on a copy of the world, or at a time you are happy to restore.\n"
+        "Until it passes, leave the write path disabled."
     )
     return 0
 

@@ -11,26 +11,33 @@ for the full design and
 
 ## Status
 
-This is an initial build. The backend, the API, the CLI and the Quasar
-frontend are all here, and the write path is implemented end to end with
-backups, an integrity check, atomic replace and post-write verification.
+The backend, API, CLI and Quasar frontend are here, and the save layer has been
+verified against the real server world: it reads the Oodle (`PlM`) container,
+parses 5,617 map objects in ~2.3s, resolves lock codes and container contents,
+and applies edits that survive a reparse.
 
-Two things are explicitly **not** done, and they are the two the proposal puts
-in Phase 1:
+Two things remain open:
 
-- **The save-format field paths are unverified against a real world.** Every
-  assumption is collected in
-  [`src/paleditor/saves/fieldpaths.py`](src/paleditor/saves/fieldpaths.py) and
-  marked `LIKELY` or `UNVERIFIED`. Run `paleditor verify-save` on the VPS
-  before trusting any of it. In particular the lock-code path is a guess, and
-  the app degrades to contents-only when it does not resolve.
+- **Writing changes the container format, and that is unproven.** The world is
+  `PlM` (Oodle); paleditor can only write `PlZ` (zlib), because no working
+  Oodle compressor is available. The maintenance window **refuses to run** until
+  `paleditor check-write` has been run and its output shown to load on a copy of
+  the world. See [docs/save-format.md](docs/save-format.md).
 - **The frontend has never been built or run.** It was written without Node
   available, so it is unexercised source. Expect to fix things on the first
   `quasar dev`.
 
-The test suite covers the parts that do not need the game: 136 tests over the
-config rules, extraction, ingest, the API, the RCON client, cron evaluation and
-the full maintenance sequence, all against a JSON fixture world.
+173 tests cover the config rules, the container and blob codecs, ingest, the
+API, the RCON client, cron evaluation and the full maintenance sequence, none of
+which need the game installed.
+
+### Reading the save needs libooz
+
+This server's saves use Oodle compression, which has no pure-Python decoder.
+paleditor loads a `libooz.so` build through ctypes. It is **not** vendored here:
+which build works depends on the host, and it is not ours to redistribute. Point
+`[palworld] oodle_library` at a local copy, or put one at
+`/opt/paleditor/lib/libooz.so`.
 
 ## Architecture
 
@@ -110,8 +117,9 @@ npx quasar build   # output lands in frontend/dist/spa, which the API serves
 | `paleditor run-window` | Run the maintenance window now; stops the game server |
 | `paleditor hash-password` | Generate an argon2id hash for the config |
 | `paleditor check-config` | Validate a config file and show the next window |
-| `paleditor verify-save` | **Phase 1.** Check the format assumptions against a real save |
-| `paleditor dump-chest` | **Phase 1.** Print one chest's slots, to read item ids back |
+| `paleditor verify-save` | Check the format assumptions against a real save |
+| `paleditor dump-chest` | Print one chest's slots, to read item ids back |
+| `paleditor check-write` | Rewrite a save unchanged, to test the PlZ container swap |
 | `paleditor init-db` | Create the schema |
 
 `-c/--config` works before or after the subcommand.
@@ -122,6 +130,8 @@ The only code path that modifies the world. One worker, one fixed sequence,
 guarded by an exclusive lockfile so a scheduled and a manual run can never
 overlap.
 
+0. Refuse outright if writing would change the save's container format and
+   that has not been confirmed, or if systemd does not recognise the game unit
 1. Claim the queue in one transaction
 2. RCON `Save`, then `Shutdown` with a countdown
 3. **Confirm the process actually exited** — the countdown is not trusted,
@@ -129,8 +139,8 @@ overlap.
    overwrite every edit
 4. Back up `Level.sav` with a sha256, prune to `backup_count`
 5. Apply the edits in memory, write a temp file, rename it into place
-   atomically, then size-check the result and restore the backup if it looks
-   corrupt
+   atomically **carrying the original's owner and mode across**, then size-check
+   the result and restore the backup if it looks corrupt
 6. Start the server and wait for RCON
 7. Reingest and verify each edit landed where it was aimed; mark it `applied`,
    or `failed` with the reason
@@ -151,6 +161,15 @@ It refuses to start, rather than starting unsafely, when:
 - `backup_dir` or the database directory is not writable
 - `rcon_password_file` is group- or world-readable
 - `schedule` is not a valid five-field cron expression
+- the maintenance lockfile's directory is not writable
+
+## Reading the right file
+
+The server rewrites `Level.sav` roughly every 30 seconds, so reading it live can
+return a torn file. Ingest reads the newest completed snapshot from
+`backup/world/` instead, and the container header is validated before anything
+is parsed. The maintenance window still uses the live file, because by then the
+server is stopped.
 
 ## Licence
 

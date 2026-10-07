@@ -7,6 +7,7 @@ never sees a save file, a GVAS structure or a parse.
 from __future__ import annotations
 
 import sqlite3
+from typing import Sequence
 
 from . import db
 
@@ -16,7 +17,8 @@ def bases(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
         SELECT b.base_guid, b.name, b.x, b.y, b.z, b.guild_id, b.last_seen_rev,
-               COUNT(c.container_guid)                                AS chest_count,
+               SUM(CASE WHEN c.kind = 'storage' THEN 1 ELSE 0 END)    AS chest_count,
+               SUM(CASE WHEN c.kind = 'loot'    THEN 1 ELSE 0 END)    AS loot_count,
                SUM(CASE WHEN c.lock_code IS NOT NULL THEN 1 ELSE 0 END) AS locked_count,
                (SELECT COUNT(DISTINCT p.container_guid)
                   FROM pending_edits p
@@ -42,14 +44,60 @@ def base(conn: sqlite3.Connection, base_guid: str) -> dict | None:
     return dict(row) if row else None
 
 
-def chests_at_base(conn: sqlite3.Connection, base_guid: str | None) -> list[dict]:
+# What the chest screens show by default. World loot respawns constantly and
+# outnumbers player storage roughly forty to one, so it is counted but not
+# listed unless asked for.
+DEFAULT_KINDS = ("storage", "lock-only")
+
+
+def _kind_clause(kinds: Sequence[str] | None) -> tuple[str, tuple]:
+    chosen = tuple(kinds) if kinds else DEFAULT_KINDS
+    if "all" in chosen:
+        return "", ()
+    placeholders = ", ".join("?" for _ in chosen)
+    return f" AND c.kind IN ({placeholders})", chosen
+
+
+def count_chests_at_base(
+    conn: sqlite3.Connection,
+    base_guid: str | None,
+    *,
+    kinds: Sequence[str] | None = None,
+) -> int:
+    where = "base_guid IS NULL" if base_guid is None else "base_guid = ?"
+    params: tuple = () if base_guid is None else (base_guid,)
+    clause, kind_params = _kind_clause(kinds)
+    return conn.execute(
+        f"SELECT COUNT(*) FROM chests c WHERE {where.replace('base_guid', 'c.base_guid')}"
+        f"{clause}",
+        (*params, *kind_params),
+    ).fetchone()[0]
+
+
+def chests_at_base(
+    conn: sqlite3.Connection,
+    base_guid: str | None,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    kinds: Sequence[str] | None = None,
+) -> list[dict]:
+    """One page of chests.
+
+    Paged because a world holds thousands of containers. The reference world
+    has 2,606 world-loot containers against 72 player chests, and an unbounded
+    query would ship all of them in one response.
+    """
     rev = db.current_rev(conn)
     where = "c.base_guid IS NULL" if base_guid is None else "c.base_guid = ?"
     params: tuple = () if base_guid is None else (base_guid,)
+    clause, kind_params = _kind_clause(kinds)
+    params = (*params, *kind_params)
     rows = conn.execute(
         f"""
         SELECT c.container_guid, c.base_guid, c.object_type, c.x, c.y, c.z,
-               c.lock_code, c.slot_count, c.last_seen_rev,
+               c.lock_code, c.slot_count, c.last_seen_rev, c.kind,
+               c.lockable, c.has_container,
                m.nickname, m.notes,
                (SELECT COUNT(*) FROM slots s
                  WHERE s.container_guid = c.container_guid
@@ -59,10 +107,11 @@ def chests_at_base(conn: sqlite3.Connection, base_guid: str | None) -> list[dict
                    AND p.status IN ('queued','applying'))    AS pending_count
           FROM chests c
           LEFT JOIN chest_meta m ON m.container_guid = c.container_guid
-         WHERE {where}
+         WHERE {where}{clause}
          ORDER BY m.nickname IS NULL, m.nickname, c.x, c.y
+         LIMIT ? OFFSET ?
         """,
-        params,
+        (*params, limit, offset),
     ).fetchall()
     return [_decorate_chest(dict(row), rev) for row in rows]
 
@@ -89,12 +138,21 @@ def chest(conn: sqlite3.Connection, container_guid: str) -> dict | None:
     if row is None:
         return None
     out = _decorate_chest(dict(row), rev)
-    out["slots"] = slots(conn, container_guid)
+    out["slots"] = slots(conn, container_guid, capacity=out.get("slot_count") or 0)
     out["pending_edits"] = edits(conn, container_guid=container_guid, open_only=True)
     return out
 
 
-def slots(conn: sqlite3.Connection, container_guid: str) -> list[dict]:
+def slots(
+    conn: sqlite3.Connection, container_guid: str, *, capacity: int = 0
+) -> list[dict]:
+    """The chest's full slot grid.
+
+    The save stores only occupied slots, but the UI draws a grid of the
+    container's capacity and a queued edit can target an index that holds
+    nothing yet. Unoccupied indices are filled in here so every addressable
+    slot has a row, including one carrying a pending edit.
+    """
     rows = conn.execute(
         """
         SELECT s.slot_index, s.item_id, s.stack_count,
@@ -121,6 +179,36 @@ def slots(conn: sqlite3.Connection, container_guid: str) -> list[dict]:
         item["display_name"] = item["display_name"] or item["item_id"]
         item["has_pending"] = item["pending_edit_id"] is not None
         out.append(item)
+
+    stored = {item["slot_index"] for item in out}
+    pending = conn.execute(
+        "SELECT id, slot_index, item_id, stack_count, status FROM pending_edits "
+        "WHERE container_guid = ? AND status IN ('queued','applying')",
+        (container_guid,),
+    ).fetchall()
+    pending_by_index = {row["slot_index"]: row for row in pending}
+
+    highest = max(stored | set(pending_by_index) | {-1}) + 1
+    for index in range(max(capacity, highest)):
+        if index in stored:
+            continue
+        edit = pending_by_index.get(index)
+        out.append(
+            {
+                "slot_index": index,
+                "item_id": None,
+                "stack_count": 0,
+                "display_name": None,
+                "category": None,
+                "max_stack": None,
+                "pending_edit_id": edit["id"] if edit else None,
+                "pending_item_id": edit["item_id"] if edit else None,
+                "pending_stack_count": edit["stack_count"] if edit else None,
+                "pending_status": edit["status"] if edit else None,
+                "has_pending": edit is not None,
+            }
+        )
+    out.sort(key=lambda item: item["slot_index"])
     return out
 
 
@@ -131,7 +219,8 @@ def search_chests(conn: sqlite3.Connection, term: str, *, limit: int = 100) -> l
     rows = conn.execute(
         """
         SELECT DISTINCT c.container_guid, c.base_guid, c.object_type, c.x, c.y, c.z,
-               c.lock_code, c.slot_count, c.last_seen_rev,
+               c.lock_code, c.slot_count, c.last_seen_rev, c.kind,
+               c.lockable, c.has_container,
                m.nickname, m.notes, b.name AS base_name,
                (SELECT COUNT(*) FROM slots s2
                  WHERE s2.container_guid = c.container_guid
@@ -144,11 +233,12 @@ def search_chests(conn: sqlite3.Connection, term: str, *, limit: int = 100) -> l
           LEFT JOIN bases b      ON b.base_guid      = c.base_guid
           LEFT JOIN slots s      ON s.container_guid = c.container_guid
           LEFT JOIN items i      ON i.item_id        = s.item_id
-         WHERE m.nickname    LIKE ?
+         WHERE (m.nickname    LIKE ?
             OR c.lock_code   LIKE ?
             OR s.item_id     LIKE ?
             OR i.display_name LIKE ?
-            OR c.container_guid LIKE ?
+            OR c.container_guid LIKE ?)
+           AND c.kind IN ('storage', 'lock-only')
          ORDER BY m.nickname IS NULL, m.nickname
          LIMIT ?
         """,

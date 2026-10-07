@@ -16,21 +16,19 @@ router = APIRouter(tags=["chests"])
 
 @router.get("/bases")
 def list_bases(conn: sqlite3.Connection = Depends(get_conn), _=Depends(get_session)):
-    unassigned = queries.chests_at_base(conn, None)
     payload = {
         "bases": queries.bases(conn),
         "last_ingest": queries.last_good_ingest(conn),
         "lock_codes_available": queries.lock_codes_available(conn),
     }
+    # Counted, not listed. A world holds thousands of containers away from any
+    # base, so this is a count plus a link rather than a payload.
+    unassigned = queries.count_chests_at_base(conn, None)
     if unassigned:
-        # Surfaced as a pseudo-base rather than hidden: chests out of range of
-        # any base camp still exist and people still want to find them.
         payload["unassigned"] = {
             "base_guid": None,
             "name": "Not near a base",
-            "chest_count": len(unassigned),
-            "locked_count": sum(1 for c in unassigned if c["lock_code"]),
-            "pending_chests": sum(1 for c in unassigned if c["pending_count"]),
+            "chest_count": unassigned,
         }
     return payload
 
@@ -38,15 +36,34 @@ def list_bases(conn: sqlite3.Connection = Depends(get_conn), _=Depends(get_sessi
 @router.get("/bases/{base_guid}/chests")
 def list_chests(
     base_guid: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    kinds: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated: storage, loot, station, lock-only, or 'all'. "
+            "Defaults to storage and lock-only, because world loot outnumbers "
+            "player chests many times over."
+        ),
+    ),
     conn: sqlite3.Connection = Depends(get_conn),
     _=Depends(get_session),
 ):
     if base_guid != "unassigned" and queries.base(conn, base_guid) is None:
         raise HTTPException(status_code=404, detail="no such base")
+    selected = _parse_kinds(kinds)
     target = None if base_guid == "unassigned" else base_guid
+    total = queries.count_chests_at_base(conn, target, kinds=selected)
+    chests = queries.chests_at_base(
+        conn, target, limit=limit, offset=offset, kinds=selected
+    )
     return {
         "base": queries.base(conn, base_guid) if target else {"base_guid": None, "name": "Not near a base"},
-        "chests": queries.chests_at_base(conn, target),
+        "chests": chests,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(chests) < total,
     }
 
 
@@ -241,6 +258,23 @@ def list_items(
     _=Depends(get_session),
 ):
     return {"items": queries.items(conn, term=q)}
+
+
+KNOWN_KINDS = {"storage", "loot", "station", "lock-only", "all"}
+
+
+def _parse_kinds(raw: str | None) -> tuple[str, ...] | None:
+    if not raw:
+        return None
+    chosen = tuple(part.strip() for part in raw.split(",") if part.strip())
+    unknown = set(chosen) - KNOWN_KINDS
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown kind(s): {', '.join(sorted(unknown))}; "
+                   f"expected {', '.join(sorted(KNOWN_KINDS))}",
+        )
+    return chosen
 
 
 def _next_window(config: Config) -> str | None:

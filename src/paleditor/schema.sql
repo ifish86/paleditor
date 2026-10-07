@@ -45,12 +45,24 @@ CREATE TABLE IF NOT EXISTS chests (
     -- model data and is the field most likely to move between game versions,
     -- so every layer treats it as optional and degrades to contents-only.
     lock_code      TEXT,
+    -- The container's capacity, not the number of occupied slots. The save
+    -- stores only occupied slots, so these differ for any chest with room left.
     slot_count     INTEGER NOT NULL DEFAULT 0,
     guild_id       TEXT,
+    -- 'storage'   player-built chests, what the app browses and edits
+    -- 'loot'      world treasure boxes, which respawn constantly
+    -- 'station'   feed boxes, furnaces and the like
+    -- 'lock-only' doors that carry a code but hold nothing
+    kind           TEXT NOT NULL DEFAULT 'storage',
+    -- Whether the object has a lock module at all. Being lockable with no code
+    -- set is a different state from not being lockable.
+    lockable       INTEGER NOT NULL DEFAULT 0,
+    has_container  INTEGER NOT NULL DEFAULT 1,
     last_seen_rev  INTEGER NOT NULL REFERENCES ingests(rev)
 );
 
-CREATE INDEX IF NOT EXISTS chests_base_idx ON chests(base_guid);
+CREATE INDEX IF NOT EXISTS chests_base_idx ON chests(base_guid, kind);
+CREATE INDEX IF NOT EXISTS chests_kind_idx ON chests(kind);
 CREATE INDEX IF NOT EXISTS chests_rev_idx  ON chests(last_seen_rev);
 
 CREATE TABLE IF NOT EXISTS slots (

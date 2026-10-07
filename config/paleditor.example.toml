@@ -25,9 +25,26 @@ server_unit = "palworld.service"
 rcon_host = "127.0.0.1"
 rcon_port = 25575
 rcon_password_file = "/etc/paleditor/rcon.secret"
-# "cheahjs" is the real parser; "fixture" reads a JSON dump and is for
+# "palworld" is the real backend; "fixture" reads a JSON world and is for
 # development only.
-save_backend = "cheahjs"
+save_backend = "palworld"
+
+# This server's saves use the Oodle (PlM) container, which needs a libooz
+# build to decompress. Left unset, a short list of standard locations is
+# searched. The library is not shipped with paleditor.
+# oodle_library = "/opt/paleditor/lib/libooz.so"
+
+# Read the newest completed snapshot from backup/world/ rather than the live
+# Level.sav. The server rewrites the live file roughly every 30 seconds, and a
+# read landing mid-write returns a torn file.
+read_from_backup = true
+
+# paleditor reads PlM but can only write PlZ (zlib), so applying an edit
+# changes the save's container format. The maintenance window refuses to run
+# until this is true. Prove it first:
+#     paleditor check-write --save-dir <dir> --out /tmp/Level.plz.sav
+# then load that file on a COPY of the world and confirm the game accepts it.
+plz_write_confirmed = false
 
 [maintenance]
 schedule = "0 5 * * *"

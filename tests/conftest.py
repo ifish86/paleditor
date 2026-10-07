@@ -182,7 +182,11 @@ def read_world(save_dir: Path) -> dict:
     return json.loads((save_dir / "Level.sav").read_text())
 
 
-def slot_of(world: dict, container_guid: str, slot_index: int) -> dict:
-    containers = world["properties"]["worldSaveData"]["value"]["ItemContainerSaveData"]["value"]
-    slots = containers[container_guid]["value"]["Slots"]["value"]["values"]
-    return next(s for s in slots if s["SlotIndex"]["value"] == slot_index)
+def slot_of(world: dict, container_guid: str, slot_index: int) -> dict | None:
+    """One stored slot, or None when nothing occupies that index.
+
+    The save records only occupied slots, so an empty slot is an absent entry
+    rather than a zeroed one.
+    """
+    slots = world["containers"][container_guid]["slots"]
+    return next((s for s in slots if s["slot_index"] == slot_index), None)

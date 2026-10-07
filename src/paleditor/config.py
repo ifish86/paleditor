@@ -64,9 +64,21 @@ class PalworldConfig:
     rcon_host: str = "127.0.0.1"
     rcon_port: int = 25575
     rcon_password_file: Path | None = None
-    # Which save backend to use. "cheahjs" is the real parser; "fixture" reads
-    # a JSON dump and exists for development and tests.
-    save_backend: str = "cheahjs"
+    # Which save backend to use. "palworld" is the real one; "fixture" reads a
+    # JSON dump and exists for development and tests.
+    save_backend: str = "palworld"
+    # Path to a libooz.so build, needed to read PlM (Oodle) saves. Left unset,
+    # a short list of standard locations is searched.
+    oodle_library: Path | None = None
+    # Read a completed snapshot from backup/world/ rather than the live
+    # Level.sav. The server rewrites the live file every ~30s and a read
+    # landing mid-write returns a torn file.
+    read_from_backup: bool = True
+    # paleditor reads the Oodle (PlM) container but can only write zlib (PlZ),
+    # so applying an edit changes the container. Until that has been shown to
+    # load on this server, the write path refuses. Prove it with
+    # ``paleditor check-write``, then set this true.
+    plz_write_confirmed: bool = False
 
     @property
     def level_sav(self) -> Path:
@@ -208,10 +220,16 @@ def _validate_auth(auth: AuthConfig) -> None:
 
 
 def _validate_palworld(pal: PalworldConfig, *, check_paths: bool) -> None:
-    if pal.save_backend not in {"cheahjs", "fixture"}:
+    if pal.save_backend not in {"palworld", "fixture"}:
+        if pal.save_backend == "cheahjs":
+            raise ConfigError(
+                "[palworld] save_backend 'cheahjs' has been removed: "
+                "palworld-save-tools cannot read this server's PlM (Oodle) "
+                "saves. Use save_backend = 'palworld'."
+            )
         raise ConfigError(
             f"[palworld] save_backend {pal.save_backend!r} is unknown; "
-            "expected 'cheahjs' or 'fixture'"
+            "expected 'palworld' or 'fixture'"
         )
     if not check_paths:
         return
@@ -334,7 +352,13 @@ def from_dict(
         rcon_host=str(pal_raw.get("rcon_host", "127.0.0.1")),
         rcon_port=int(pal_raw.get("rcon_port", 25575)),
         rcon_password_file=Path(secret_file).expanduser() if secret_file else None,
-        save_backend=str(pal_raw.get("save_backend", "cheahjs")),
+        save_backend=str(pal_raw.get("save_backend", "palworld")),
+        oodle_library=(
+            Path(pal_raw["oodle_library"]).expanduser()
+            if pal_raw.get("oodle_library") else None
+        ),
+        read_from_backup=bool(pal_raw.get("read_from_backup", True)),
+        plz_write_confirmed=bool(pal_raw.get("plz_write_confirmed", False)),
     )
 
     mw_raw = raw.get("maintenance") or {}

@@ -1,127 +1,171 @@
-# Save file internals, and what is still unverified
+# Save file internals
 
 Everything paleditor reads and writes lives in `Level.sav`. `Players/<UID>.sav`
-holds identity, technology points and unlocked recipes, and this project does
-not touch it.
+holds identity, technology points and unlocked recipes, and is not touched.
 
-`Level.sav` is a GVAS structure wrapped in zlib compression. The community
-parser is cheahjs'
-[palworld-save-tools](https://github.com/cheahjs/palworld-save-tools), whose
-last release was v0.24.0 in October 2024. Converting a world to JSON typically
-produces a file over 1GB and takes roughly 1m40s per pass, which is why reads
-are served from SQLite and never from a parse.
+Everything below was read back from this server's world on 2026-10-07
+(`.../0/BB377176C64B470FA2713A2BAF485854`): 5,617 map objects, 5,308
+containers, 3 bases, 109 lockable objects of which 18 carry a code.
 
-## Where the assumptions live
+## The container: PlM, not PlZ
 
-Every field path is collected in
-[`src/paleditor/saves/fieldpaths.py`](../src/paleditor/saves/fieldpaths.py),
-not inlined across the parser, so a format change is a one-file edit. Each is
-labelled:
+A `.sav` is a 12-byte header followed by a compressed GVAS payload:
 
-| Status | Meaning |
+    u32 uncompressed_size | u32 compressed_size | 3-byte magic | u8 save_type
+
+Two magics exist. `PlZ` is zlib. **This server writes `PlM`, which is Oodle
+Mermaid.** That matters more than anything else in this document:
+
+- cheahjs' `palworld-save-tools` hardcodes `MAGIC_BYTES = b"PlZ"`. It cannot
+  read this world at all — it fails on byte 8. The original proposal's "GVAS
+  wrapped in zlib" was true of older Palworld, not of this server.
+- Its writer always emits `PlZ`, so a naive fix would have written a zlib save
+  over an Oodle world on the first maintenance window.
+
+paleditor reads both containers. Oodle decompression goes through a `libooz.so`
+build loaded by ctypes ([`saves/oodle.py`](../src/paleditor/saves/oodle.py));
+the library is not vendored, because which build works depends on the host.
+
+### Writing is still unproven
+
+paleditor writes `PlZ`. `libooz.so` exports `OodLZ_Compress`, but it segfaults
+when called, so there is no working Oodle compressor to write `PlM` with.
+
+**Whether Palworld loads a PlZ save in place of a PlM one is the one thing
+paleditor cannot determine on its own, and the entire write path rests on it.**
+The maintenance window refuses to run on an Oodle world until
+`[palworld] plz_write_confirmed = true`. To earn that:
+
+```bash
+paleditor check-write --save-dir <dir> --out /tmp/Level.plz.sav
+```
+
+That rewrites the save with no edits at all, so the only difference is the
+container, and verifies the GVAS payload survives byte for byte. Then load the
+result on a **copy** of the world and see whether the game accepts it.
+
+## Parsing: structure from the library, blobs by hand
+
+The GVAS payload parses with `palworld-save-tools`, but with its custom
+decoders **disabled**:
+
+```python
+GvasFile.read(payload, PALWORLD_TYPE_HINTS, {})
+```
+
+With the stock decoders it raises `Warning: EOF not reached` in
+`rawdata/character.py`: those decoders walk record layouts, and this world's
+character layout has moved since the parser's last release in October 2024.
+With them off, every property is skipped by its declared size, the whole
+structure parses in **2.1 seconds**, and `g.write({})` round-trips **byte for
+byte**.
+
+That is the lesson palstats states outright and paleditor now follows: anchor
+on stable markers and skip what you do not understand, rather than walking
+record layouts that every game patch can move.
+
+The handful of `RawData` blobs paleditor does need are decoded in
+[`saves/blobs.py`](../src/paleditor/saves/blobs.py). Each preserves the trailing
+bytes it does not understand, so a re-encode changes only the fields asked for.
+
+| Blob | Layout |
 | --- | --- |
-| `CONFIRMED` | Read back from a live dump on this world |
-| `LIKELY` | Documented by the community parser, not yet checked here |
-| `UNVERIFIED` | Must be confirmed before the write path is trusted with it |
+| Item slot | `i32 slot_index` `i32 stack_count` `i32 strlen` `utf8+NUL` `tail` (52 bytes in 11,209 of 11,237 slots) |
+| Password lock | `u8 version` `i32 strlen` `utf8+NUL` `tail`. `strlen == 0` means lockable with no code set |
+| Item container id | first 16 bytes are the container GUID |
+| Transform | 3 doubles immediately before the **first** `(1.0, 1.0, 1.0)` scale vector |
 
-**Nothing in this repo is `CONFIRMED` yet.** The build was done without access
-to a real save.
+The transform detail is a trap worth keeping: a base camp blob holds a *second*
+scale vector later on, preceded by what looks like a bounding box of
+`(-170, 0, 170)`. Scanning backwards puts every base at the same point.
 
-## Phase 1: the checks to run before trusting the UI
+## Only occupied slots are stored
 
-Run these on the VPS, against the real world. Phase 1 is not optional and not
-parallelisable: building UI on a guessed lock-code path wastes the work twice.
+This changes the edit model, so it is the easiest thing to get wrong.
 
-```bash
-paleditor verify-save --save-dir /home/palworld/Pal/Saved/SaveGames/0/<world-id>
-```
+`SlotNum` is the container's **capacity**. The `Slots` array holds **only
+occupied slots** — across 4,000 containers checked, not one empty slot was
+stored. So:
 
-That prints the base and chest counts, whether a lock code resolved, a sample
-code, every distinct item id found, and the status table above.
+- a chest's capacity and its number of stored slots are different numbers
+- putting an item into an empty slot means **adding** an entry, not editing one
+- clearing a slot means **removing** the entry, and the slot then simply
+  vanishes from the save
 
-### 1. Where the lock code actually lives
+paleditor's API still presents a full grid of `capacity` slots, because that is
+what the UI draws and what a queued edit needs to target, but the save itself
+stays sparse. Verification treats an absent slot as success for a clear and
+failure for a fill.
 
-The field most likely to move between game versions. It sits on the map
-object's concrete model data rather than on the container. `verify-save` tries
-each path in `LOCK_CODE_CANDIDATES` in order and reports which one hit.
+## Objects: chests, loot and doors
 
-Set a known code on a chest in-game, then confirm the value comes back:
+`ConcreteModel.ModuleMap` is keyed by the full enum string:
 
-```bash
-paleditor dump-chest --save-dir <dir> <container-guid>
-```
-
-If none of the candidates resolve, `lock_codes_available` goes false, the API
-reports it, and the UI drops to contents-only rather than showing every chest
-as unlocked. Treat the field as optional throughout; it already is in the
-schema, the records and the frontend.
-
-### 2. The exact `ItemId` strings for pal souls
-
-Deliberately absent from
-[`src/paleditor/data/items.json`](../src/paleditor/data/items.json). These are
-the ids most often wrong in community lists, and the proposal says not to guess
-them. Place one of each size in a chest, dump the container, and add what comes
-back with `provenance: "confirmed"` — the seeder never overwrites those.
-
-Ingest records every unknown id it sees as `provenance: 'observed'`, so the
-catalogue grows its own worklist. An id absent from the catalogue still renders
-as its raw string rather than being hidden.
-
-### 3. Whether container GUIDs survive a restart
-
-Nicknames join on the container GUID, so if it changes, every nickname detaches
-from its chest. Run `verify-save` twice with a server restart and a world save
-cycle in between, and diff the GUID lists:
-
-```bash
-paleditor dump-chest --save-dir <dir> | awk '{print $1}' | sort > /tmp/before
-# restart the server, let it save
-paleditor dump-chest --save-dir <dir> | awk '{print $1}' | sort > /tmp/after
-diff /tmp/before /tmp/after
-```
-
-If they drift, `chest_meta` needs a different join key and that is a schema
-change, so check this early.
-
-### 4. Which parser round-trips fastest
-
-Palworld Save Pal no longer converts JSON exported by the old `convert.py` back
-into a `.sav`, so pick one toolchain and stay on it. paleditor keeps the parser
-behind the `SaveBackend` protocol in
-[`src/paleditor/saves/base.py`](../src/paleditor/saves/base.py) so it can be
-swapped without touching ingest or the window worker.
-
-## The cheahjs backend is written but unrun
-
-[`src/paleditor/saves/cheahjs.py`](../src/paleditor/saves/cheahjs.py) follows
-the documented v0.24.0 API — `decompress_sav_to_gvas`, `GvasFile.read`,
-`gvas.write`, `compress_gvas_to_sav` — but has never been executed against a
-real save, because the dependency was not installed during the build. Install
-it and run `verify-save` before relying on it:
-
-```bash
-pip install -e '.[parser]'
-```
-
-The import is guarded: without the parser the API, the frontend and the test
-suite all work, and only ingest and the write path refuse.
-
-## Structures used
-
-All under `worldSaveData`:
-
-| Structure | What paleditor takes from it |
+| Module key | Count here |
 | --- | --- |
-| `MapObjectSaveData` | One entry per placed object. Chests carry a container GUID, world coordinates and a guild id. |
-| `ItemContainerSaveData` | Keyed by container GUID. Each entry holds the slot array: `SlotIndex`, `ItemId`, `StackCount`. |
-| `BaseCampSaveData` | Base GUIDs and coordinates, used to group chests by base. |
+| `EPalMapObjectConcreteModelModuleType::ItemContainer` | 2,773 |
+| `EPalMapObjectConcreteModelModuleType::GuildSecurity` | 112 |
+| `EPalMapObjectConcreteModelModuleType::PasswordLock` | 109 |
 
-Map objects carry no explicit parent base link, so chests are grouped by
-proximity to the nearest base camp with the guild id as a tiebreaker. Beyond
-`BASE_ASSIGNMENT_RADIUS` a chest is left unassigned rather than attached to a
-base it does not belong to; the UI surfaces those under a "Not near a base"
-card instead of hiding them.
+**Most containers are not chests.** Of ~2,700, roughly 65 are player-built
+storage; the rest are `TreasureBox*` world loot that respawns constantly. There
+are 1,443 plain `TreasureBox` objects alone. Listing them would bury the chests
+anybody actually wants, so [`fieldpaths.classify`](../src/paleditor/saves/fieldpaths.py)
+sorts objects into `storage`, `loot`, `station` and `lock-only`, and the chest
+screens show storage by default.
 
-`CHEST_OBJECT_EXCLUDES` exists because `box` is one of the chest name hints and
-would otherwise pull in the Pal Box and feed boxes, which v1 does not browse.
+**Locked doors carry codes and hold nothing.** Of the 18 objects with a code
+set, several are `Stone_DoorWall`, `Wooden_DoorWall` and `Glass_DoorWall`. They
+own no container, so a model keyed purely on container GUID drops them — and
+lock codes are what this app exists for. They are kept as `kind = 'lock-only'`
+with a synthetic id derived from type and position.
+
+## Container GUIDs are stable, so nicknames work
+
+Compared across backup snapshots six days apart:
+
+| | start | end | persisted |
+| --- | --- | --- | --- |
+| Player storage | 43 | 65 | 33 (the rest were built or dismantled) |
+| Everything else | 1,024 | 2,708 | 921 |
+
+Every GUID present in both snapshots carried an **identical** lock code. So the
+container GUID is a sound join key for `chest_meta`, and nicknames survive
+restarts.
+
+## Never read the live Level.sav
+
+The server rewrites `Level.sav` roughly every 30 seconds (the backup snapshots
+are exactly 30s apart). A read landing mid-write returns a torn file whose
+header still declares the old compressed length.
+
+Two defences, both borrowed from palstats:
+
+1. `container.validate()` refuses a file whose declared compressed length does
+   not match what is present.
+2. Ingest reads the newest **completed** snapshot from
+   `<save_dir>/backup/world/<timestamp>/Level.sav` by default
+   ([`savesource.py`](../src/paleditor/savesource.py)). Those files are closed,
+   so they are safe at any time. The maintenance window still uses the live
+   file, because by then the server is stopped.
+
+## Item ids
+
+Read from the live world, not guessed. The reference world holds 466 distinct
+ids across all containers. Notable ones that are easy to get wrong:
+
+| Guess that would be wrong | Actual |
+| --- | --- |
+| `Paldium` | `Pal_crystal_S` |
+| `Ore` | `CopperOre`, `ManganeseOre` |
+| `Bullet_Normal` | `Arrow`, `RoughBullet`, `HandgunBullet`, `RifleBullet`, `AssaultRifleBullet` |
+| `Gunpowder` | `GunPowder2` |
+| `Bone` | `bone` (lower case) |
+
+Pal souls are `PalUpgradeStone`, `PalUpgradeStone2`, `PalUpgradeStone3`.
+
+[`data/items.json`](../src/paleditor/data/items.json) carries no `max_stack`
+values. The API rejects an edit whose stack exceeds a known cap, so a guessed
+cap blocks a legitimate edit; the column stays empty until a real value is read
+off the item. Ingest records every unknown id as `provenance = 'observed'`, and
+an id absent from the catalogue still renders as its raw string.

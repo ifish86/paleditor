@@ -43,11 +43,32 @@ def connect(path: str | Path, *, readonly: bool = False) -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first schema. SQLite cannot add them through
+# CREATE TABLE IF NOT EXISTS, so an existing database is migrated here.
+_ADDED_COLUMNS = (
+    ("chests", "kind", "TEXT NOT NULL DEFAULT 'storage'"),
+    ("chests", "lockable", "INTEGER NOT NULL DEFAULT 0"),
+    ("chests", "has_container", "INTEGER NOT NULL DEFAULT 1"),
+)
+
+
 def init(path: str | Path) -> None:
     """Create the schema if it is not already there. Safe to run repeatedly."""
     with closing_connect(path) as conn:
         conn.executescript(schema_sql())
+        _migrate(conn)
         conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, definition in _ADDED_COLUMNS:
+        existing = {
+            row["name"] for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+        if not existing:
+            continue
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 @contextmanager

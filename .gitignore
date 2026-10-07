@@ -43,6 +43,17 @@ paleditor.db*
 *.log
 logs/
 
+# --- Reference material and native libraries ------------------------------
+# palstats is a separate project kept alongside for reference; it is not part
+# of paleditor and must not be committed into this repo.
+palstats/
+
+# libooz.so is a third-party Oodle build needed to read PlM saves. It is not
+# vendored: which build works depends on the host, and it is not ours to
+# redistribute. Point [palworld] oodle_library at a local copy.
+libooz.so
+*.so.*
+
 # --- Python ---------------------------------------------------------------
 __pycache__/
 *.py[cod]

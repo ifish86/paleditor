@@ -61,8 +61,11 @@ def test_bases_carry_counts_for_the_card_grid(friend_client):
     assert len(payload["bases"]) == 3
     assert payload["lock_codes_available"] is True
     for base in payload["bases"]:
-        assert {"chest_count", "locked_count", "pending_chests"} <= base.keys()
+        assert {"chest_count", "loot_count", "locked_count", "pending_chests"} <= base.keys()
+    # Player-built storage only. World loot is counted separately so it cannot
+    # bury the chests people are actually looking for.
     assert sum(b["chest_count"] for b in payload["bases"]) == 4
+    assert sum(b["loot_count"] for b in payload["bases"]) == 1
 
 
 def test_a_chest_out_of_range_of_any_base_is_still_reachable(friend_client):
@@ -72,22 +75,68 @@ def test_a_chest_out_of_range_of_any_base_is_still_reachable(friend_client):
     assert len(chests) == 1
 
 
+def test_world_loot_is_kept_out_of_the_chest_list(friend_client):
+    """A real world holds thousands of treasure boxes against a few dozen chests."""
+    bases = friend_client.get("/api/bases").json()["bases"]
+    base = next(b for b in bases if b["loot_count"])
+    listed = friend_client.get(f"/api/bases/{base['base_guid']}/chests").json()
+    assert all(c["kind"] != "loot" for c in listed["chests"])
+    with_loot = friend_client.get(
+        f"/api/bases/{base['base_guid']}/chests", params={"kinds": "loot"}
+    ).json()
+    assert any(c["kind"] == "loot" for c in with_loot["chests"])
+
+
+def test_a_locked_door_is_kept_even_though_it_holds_nothing(friend_client):
+    """Lock codes are the point of the app; doors carry them too."""
+    bases = friend_client.get("/api/bases").json()["bases"]
+    found = []
+    for base in bases:
+        found += [
+            c for c in friend_client.get(f"/api/bases/{base['base_guid']}/chests").json()["chests"]
+            if c["kind"] == "lock-only"
+        ]
+    assert found, "a door with a code must not be dropped"
+    assert found[0]["lock_code"] == "7826"
+    assert found[0]["has_container"] == 0
+
+
+def test_the_chest_list_is_paged(friend_client):
+    bases = friend_client.get("/api/bases").json()["bases"]
+    base = next(b for b in bases if b["chest_count"] > 1)
+    page = friend_client.get(
+        f"/api/bases/{base['base_guid']}/chests", params={"limit": 1}
+    ).json()
+    assert len(page["chests"]) == 1
+    assert page["total"] >= 2
+    assert page["has_more"] is True
+
+
 def test_chest_detail_has_slots_and_fill_level(friend_client):
-    chest = first_chest(friend_client)
-    detail = friend_client.get(f"/api/chests/{chest['container_guid']}").json()
-    assert len(detail["slots"]) == detail["slot_count"] == 8
+    detail = friend_client.get("/api/chests/6d9eb0f3-3c70-42e6-b8e2-4e5274d02609").json()
+    # slot_count is the container's capacity. The save stores only occupied
+    # slots, but the detail view returns the whole grid so the UI can draw it
+    # and a queued edit on an empty slot has somewhere to show.
+    assert detail["slot_count"] == 40
+    assert len(detail["slots"]) == 40
+    occupied = [s for s in detail["slots"] if s["item_id"]]
+    assert len(occupied) == 3
+    assert [s["slot_index"] for s in occupied] == [0, 1, 3]
     assert detail["pending_edits"] == []
-    assert 0.0 < detail["fill_ratio"] <= 1.0
+    assert 0.0 < detail["fill_ratio"] < 1.0
 
 
 def test_slots_resolve_display_names_and_fall_back_to_the_raw_id(friend_client):
-    detail = friend_client.get("/api/chests/aaaa0003-0000-0000-0000-000000000003").json()
+    detail = friend_client.get("/api/chests/0bd0dc7c-ed4e-29d3-9daf-74b4b749f06d").json()
     by_index = {s["slot_index"]: s for s in detail["slots"]}
-    # Seeded id resolves to its curated name.
-    assert by_index[1]["display_name"] == "Ingot"
-    # Unknown id renders as the raw string rather than being hidden.
-    assert by_index[0]["item_id"] == "PalSphere_Mega"
-    assert by_index[0]["display_name"] == "PalSphere_Mega"
+    # Seeded ids resolve to their curated names.
+    assert by_index[0]["display_name"] == "Pal Sphere"
+    assert by_index[5]["display_name"] == "Pal Soul (S)"
+    # An id the catalogue does not know renders as the raw string.
+    far = friend_client.get("/api/chests/9f1c7a22-0000-4000-8000-000000000005").json()
+    unknown = far["slots"][0]
+    assert unknown["item_id"] == "Paldium"
+    assert unknown["display_name"] == "Paldium"
 
 
 def test_missing_chest_is_a_404(friend_client):
@@ -119,10 +168,10 @@ def test_a_blank_nickname_clears_it(friend_client):
 
 
 def test_search_finds_a_chest_by_nickname_lock_code_and_contents(friend_client):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     friend_client.patch(f"/api/chests/{guid}/meta", json={"nickname": "Sphere stash"})
 
-    for term in ("Sphere stash", "1234", "PalSphere", "Pal Sphere"):
+    for term in ("Sphere stash", "7826", "Wood_Fine", "Quality Wood"):
         hits = friend_client.get("/api/chests/search", params={"q": term}).json()["chests"]
         assert any(c["container_guid"] == guid for c in hits), f"{term!r} found nothing"
 
@@ -131,7 +180,7 @@ def test_search_finds_a_chest_by_nickname_lock_code_and_contents(friend_client):
 
 
 def test_queue_an_edit_and_see_it_on_the_chest(friend_client):
-    guid = "aaaa0004-0000-0000-0000-000000000004"
+    guid = "54f6254e-5940-4f46-f3e4-ce935e7a045b"
     response = friend_client.post(
         f"/api/chests/{guid}/edits",
         json={"slot_index": 0, "item_id": "Wood", "stack_count": 50},
@@ -154,7 +203,7 @@ def test_queue_an_edit_and_see_it_on_the_chest(friend_client):
 
 
 def test_clearing_a_slot_is_a_null_item(friend_client):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     response = friend_client.post(
         f"/api/chests/{guid}/edits",
         json={"slot_index": 1, "item_id": None, "stack_count": 0},
@@ -166,7 +215,7 @@ def test_clearing_a_slot_is_a_null_item(friend_client):
 def test_an_item_with_a_zero_stack_is_rejected_rather_than_treated_as_a_clear(
     friend_client,
 ):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     response = friend_client.post(
         f"/api/chests/{guid}/edits",
         json={"slot_index": 2, "item_id": "Wood", "stack_count": 0},
@@ -176,17 +225,34 @@ def test_an_item_with_a_zero_stack_is_rejected_rather_than_treated_as_a_clear(
 
 
 def test_a_slot_out_of_range_is_rejected(friend_client):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     response = friend_client.post(
         f"/api/chests/{guid}/edits",
         json={"slot_index": 99, "item_id": "Wood", "stack_count": 1},
     )
     assert response.status_code == 422
-    assert "8 slots" in response.json()["detail"]
+    assert "40 slots" in response.json()["detail"]
 
 
-def test_a_stack_over_the_items_cap_is_rejected(friend_client):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+def test_an_empty_slot_within_capacity_is_accepted(friend_client):
+    """Only occupied slots are stored, so an unused index is still valid."""
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
+    response = friend_client.post(
+        f"/api/chests/{guid}/edits",
+        json={"slot_index": 39, "item_id": "Wood", "stack_count": 1},
+    )
+    assert response.status_code == 201
+
+
+def test_a_stack_over_a_known_cap_is_rejected(friend_client, conn):
+    """The cap check only fires for an item whose real cap has been recorded.
+
+    No cap ships in the seed catalogue: a guessed one would reject a perfectly
+    good edit, so the column stays empty until somebody reads the real value.
+    """
+    conn.execute("UPDATE items SET max_stack = 50 WHERE item_id = 'PalSphere'")
+    conn.commit()
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     response = friend_client.post(
         f"/api/chests/{guid}/edits",
         json={"slot_index": 2, "item_id": "PalSphere", "stack_count": 999},
@@ -195,8 +261,15 @@ def test_a_stack_over_the_items_cap_is_rejected(friend_client):
     assert "stacks to 50" in response.json()["detail"]
 
 
+def test_no_cap_is_guessed_for_seeded_items(friend_client):
+    items = friend_client.get("/api/items").json()["items"]
+    seeded = [i for i in items if i["provenance"] == "seed"]
+    assert seeded
+    assert all(i["max_stack"] is None for i in seeded)
+
+
 def test_two_open_edits_on_one_slot_are_refused(friend_client):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     payload = {"slot_index": 2, "item_id": "Wood", "stack_count": 5}
     assert friend_client.post(f"/api/chests/{guid}/edits", json=payload).status_code == 201
     second = friend_client.post(f"/api/chests/{guid}/edits", json=payload)
@@ -205,7 +278,7 @@ def test_two_open_edits_on_one_slot_are_refused(friend_client):
 
 
 def test_cancel_a_queued_edit(friend_client):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     edit_id = friend_client.post(
         f"/api/chests/{guid}/edits",
         json={"slot_index": 2, "item_id": "Wood", "stack_count": 5},
@@ -224,7 +297,7 @@ def test_cancelling_a_missing_edit_is_a_404(friend_client):
 
 
 def test_the_queue_endpoint_reports_depth_and_the_next_window(friend_client):
-    guid = "aaaa0001-0000-0000-0000-000000000001"
+    guid = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
     friend_client.post(
         f"/api/chests/{guid}/edits",
         json={"slot_index": 2, "item_id": "Wood", "stack_count": 5},
@@ -246,7 +319,7 @@ def test_the_item_catalogue_is_searchable_for_the_picker(friend_client):
     payload = friend_client.get("/api/items", params={"q": "sphere"}).json()["items"]
     ids = {item["item_id"] for item in payload}
     assert "PalSphere" in ids
-    assert "PalSphere_Mega" in ids  # observed, still offered
+    assert "PalSphere_Giga" in ids
 
 
 # -- status ----------------------------------------------------------------
@@ -254,7 +327,7 @@ def test_the_item_catalogue_is_searchable_for_the_picker(friend_client):
 
 def test_status_reports_ingest_queue_and_window(friend_client):
     payload = friend_client.get("/api/status").json()
-    assert payload["last_good_ingest"]["chest_count"] == 5
+    assert payload["last_good_ingest"]["chest_count"] == 8
     assert payload["stale"] is False
     assert payload["queue"]["queued"] == 0
     assert payload["next_window"]
@@ -289,3 +362,11 @@ def test_the_window_refuses_to_run_while_another_holds_the_lock(owner_client, co
         response = owner_client.post("/api/maintenance/run", params={"confirm": True})
     assert response.status_code == 409
     assert "already running" in response.json()["detail"]
+
+
+def test_search_results_say_what_kind_of_object_each_hit_is(friend_client):
+    """A code can be on a door as well as a chest, so the kind has to show."""
+    hits = friend_client.get("/api/chests/search", params={"q": "7826"}).json()["chests"]
+    assert hits
+    assert all("kind" in c for c in hits)
+    assert {"storage", "lock-only"} & {c["kind"] for c in hits}

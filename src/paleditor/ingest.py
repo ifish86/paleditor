@@ -19,6 +19,7 @@ from pathlib import Path
 from . import catalog, db
 from .config import Config
 from .errors import ParserUnavailable, SaveFormatError
+from . import savesource
 from .saves import WorldSnapshot, get_backend
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,13 @@ log = logging.getLogger(__name__)
 # A save that parses but yields nothing is treated as a format failure rather
 # than a world where every chest was dismantled at once.
 MIN_PLAUSIBLE_CHESTS = 1
+
+
+def _backend_for(config: Config):
+    """Build the configured backend, passing through the Oodle library path."""
+    if config.palworld.save_backend == "palworld":
+        return get_backend("palworld", oodle_library=config.palworld.oodle_library)
+    return get_backend(config.palworld.save_backend)
 
 
 @dataclass
@@ -53,9 +61,16 @@ def run(config: Config, *, conn: sqlite3.Connection | None = None) -> IngestResu
 
 
 def _run(config: Config, conn: sqlite3.Connection) -> IngestResult:
-    backend = get_backend(config.palworld.save_backend)
-    level = config.palworld.level_sav
+    backend = _backend_for(config)
+    # Prefer a completed snapshot. Reading the live file while the server is
+    # writing it returns a torn save, which is the single easiest way to ingest
+    # a world that never existed.
+    source = savesource.pick(
+        config.palworld.save_dir, prefer_backup=config.palworld.read_from_backup
+    )
+    level = source.level_sav
     started = time.monotonic()
+    log.info("ingesting from %s (%s)", level, source.label)
 
     cursor = conn.execute(
         "INSERT INTO ingests(started_at, status, backend) VALUES (?, 'running', ?)",
@@ -162,8 +177,10 @@ def _write_chests(conn: sqlite3.Connection, snapshot: WorldSnapshot, rev: int) -
     conn.executemany(
         """
         INSERT INTO chests(container_guid, base_guid, object_type, x, y, z,
-                           lock_code, slot_count, guild_id, last_seen_rev)
-        VALUES (:guid, :base, :type, :x, :y, :z, :lock, :slots, :guild, :rev)
+                           lock_code, slot_count, guild_id, kind, lockable,
+                           has_container, last_seen_rev)
+        VALUES (:guid, :base, :type, :x, :y, :z, :lock, :slots, :guild, :kind,
+                :lockable, :has_container, :rev)
         ON CONFLICT(container_guid) DO UPDATE SET
             base_guid     = excluded.base_guid,
             object_type   = excluded.object_type,
@@ -171,6 +188,9 @@ def _write_chests(conn: sqlite3.Connection, snapshot: WorldSnapshot, rev: int) -
             lock_code     = excluded.lock_code,
             slot_count    = excluded.slot_count,
             guild_id      = excluded.guild_id,
+            kind          = excluded.kind,
+            lockable      = excluded.lockable,
+            has_container = excluded.has_container,
             last_seen_rev = excluded.last_seen_rev
         """,
         [
@@ -178,7 +198,9 @@ def _write_chests(conn: sqlite3.Connection, snapshot: WorldSnapshot, rev: int) -
                 "guid": c.container_guid, "base": c.base_guid,
                 "type": c.object_type, "x": c.x, "y": c.y, "z": c.z,
                 "lock": c.lock_code, "slots": c.slot_count,
-                "guild": c.guild_id, "rev": rev,
+                "guild": c.guild_id, "kind": c.kind,
+                "lockable": int(c.lockable), "has_container": int(c.has_container),
+                "rev": rev,
             }
             for c in snapshot.chests
         ],

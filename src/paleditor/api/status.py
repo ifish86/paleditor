@@ -64,7 +64,8 @@ def status_(
         )
 
     try:
-        backend_available = get_backend(config.palworld.save_backend).available()
+        from .. import ingest as _ingest
+        backend_available = _ingest._backend_for(config).available()
     except Exception:
         backend_available = False
     if not backend_available:
@@ -134,7 +135,8 @@ def run_maintenance(
             status_code=409,
             detail="a maintenance window is already running",
         )
-    if not get_backend(config.palworld.save_backend).available():
+    from .. import ingest as _ingest
+    if not _ingest._backend_for(config).available():
         raise HTTPException(
             status_code=503,
             detail=(

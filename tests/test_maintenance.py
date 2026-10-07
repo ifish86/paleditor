@@ -18,8 +18,8 @@ from paleditor.maintenance import run_window
 
 from .conftest import FakeRcon, FakeServerControl, read_world, slot_of
 
-EMPTY_CHEST = "aaaa0004-0000-0000-0000-000000000004"
-FULL_CHEST = "aaaa0001-0000-0000-0000-000000000001"
+EMPTY_CHEST = "54f6254e-5940-4f46-f3e4-ce935e7a045b"
+FULL_CHEST = "6d9eb0f3-3c70-42e6-b8e2-4e5274d02609"
 
 
 def queue_edit(conn, container_guid, slot_index, item_id, stack_count, by="friend"):
@@ -56,10 +56,11 @@ def test_a_queued_edit_lands_in_the_save_and_is_marked_applied(
     assert report.applied == 1
     assert report.failed == 0
 
-    world = read_world(save_dir)
-    slot = slot_of(world, EMPTY_CHEST, 0)
-    assert slot["ItemId"]["value"]["StaticId"]["value"] == "Wood"
-    assert slot["StackCount"]["value"] == 50
+    slot = slot_of(read_world(save_dir), EMPTY_CHEST, 0)
+    # The chest was empty, so this slot had to be added rather than edited.
+    assert slot is not None, "the edit did not add a slot to an empty container"
+    assert slot["item_id"] == "Wood"
+    assert slot["stack_count"] == 50
 
     row = status_of(conn, edit_id)
     assert row["status"] == "applied"
@@ -72,9 +73,8 @@ def test_clearing_a_slot_empties_it(config, conn, ingested, save_dir, fake_contr
     report = run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
 
     assert report.applied == 1, report.error
-    slot = slot_of(read_world(save_dir), FULL_CHEST, 1)
-    assert slot["ItemId"]["value"]["StaticId"]["value"] == "None"
-    assert slot["StackCount"]["value"] == 0
+    # Clearing removes the entry entirely; an empty slot is not stored.
+    assert slot_of(read_world(save_dir), FULL_CHEST, 1) is None
     assert status_of(conn, edit_id)["status"] == "applied"
 
 
@@ -452,3 +452,38 @@ def test_an_unknown_systemd_unit_stops_the_window_before_it_claims_anything(
     assert (save_dir / "Level.sav").read_bytes() == before
     assert status_of(conn, edit_id)["status"] == "queued"
     assert control.calls == []
+
+
+def test_the_window_refuses_to_change_an_oodle_world_until_confirmed(
+    config, conn, ingested, save_dir, fake_control
+):
+    """Reading is PlM, writing is PlZ. That container change must be proven
+    on this server before it is done to a live world."""
+    from paleditor.saves import container
+
+    edit_id = queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    level = save_dir / "Level.sav"
+    body = level.read_bytes()
+    # Give the fixture save a PlM header so the gate sees an Oodle world.
+    level.write_bytes(
+        __import__("struct").pack("<II", len(body), len(body))
+        + container.MAGIC_OODLE + bytes([0x31]) + body
+    )
+
+    report = run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+
+    assert not report.ok
+    assert "check-write" in report.error
+    assert report.claimed == 0, "the queue must not be claimed"
+    assert status_of(conn, edit_id)["status"] == "queued"
+    assert fake_control.calls == []
+
+
+def test_a_confirmed_deployment_may_change_the_container(
+    config, conn, ingested, fake_control
+):
+    object.__setattr__(config.palworld, "plz_write_confirmed", True)
+    queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    report = run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+    assert report.ok, report.error
+    assert report.applied == 1

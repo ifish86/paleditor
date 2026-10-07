@@ -28,9 +28,19 @@ class ChestRecord:
     # None means "not found in this save", not "no code set". Callers must not
     # distinguish an unlocked chest from a parser that lost the field.
     lock_code: str | None = None
+    # The container's capacity (SlotNum), not the number of stored slots. The
+    # save records only occupied slots, so these differ for any chest that is
+    # not completely full.
     slot_count: int = 0
     slots: tuple[SlotRecord, ...] = ()
     base_guid: str | None = None
+    # "storage" for player-placed chests, "loot" for world treasure boxes,
+    # "lock-only" for doors that carry a code but hold nothing.
+    kind: str = "storage"
+    # True when the object has a PasswordLock module at all. An object that can
+    # be locked but has no code set is different from one that cannot be locked.
+    lockable: bool = False
+    has_container: bool = True
 
 
 @dataclass(frozen=True)

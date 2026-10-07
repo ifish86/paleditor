@@ -25,6 +25,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import stat
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -36,7 +37,7 @@ from .config import Config
 from .errors import MaintenanceError, RconError, SaveFormatError, WindowBusy
 from .locking import FileLock
 from .rcon import RconClient, wait_until_responsive
-from .saves import SlotEdit, get_backend
+from .saves import SlotEdit, container
 from .servercontrol import ServerControl, SystemdServerControl, wait_for_exit
 
 log = logging.getLogger(__name__)
@@ -111,6 +112,15 @@ def _sequence(
     *,
     trigger: str,
 ) -> WindowReport:
+    # Step 0a: refuse to change the save's container format unless that has
+    # been shown to work on this server. Reading is PlM, writing is PlZ, and a
+    # world the game then refuses to load is the worst outcome this code has.
+    problem = _container_change_blocked(config)
+    if problem is not None:
+        report.error = problem
+        report.step(problem)
+        return report
+
     # Step 0: refuse a unit systemd does not know. A typo in server_unit reads
     # as "already stopped", and writing the save under a live server would lose
     # every edit to its next autosave.
@@ -160,7 +170,7 @@ def _sequence(
         backup = _backup(config, report)
 
         # Step 5: parse, apply, serialise, atomic rename.
-        backend = get_backend(config.palworld.save_backend)
+        backend = ingest._backend_for(config)
         temp_path = level.with_name(level.name + f".paleditor-{report.batch_id[:8]}.tmp")
         try:
             apply_report = backend.apply_edits(level, temp_path, edits)
@@ -284,6 +294,29 @@ def _warn_and_stop(config, control, report, rcon_factory) -> None:
 
 
 # -- queue -----------------------------------------------------------------
+
+
+def _container_change_blocked(config: Config) -> str | None:
+    """None when writing is safe, otherwise why it is not."""
+    if config.palworld.plz_write_confirmed:
+        return None
+    level = config.palworld.level_sav
+    try:
+        header = level.open("rb").read(container.HEADER_SIZE)
+    except OSError as exc:
+        return f"cannot read the save header of {level}: {exc}"
+    if len(header) < container.HEADER_SIZE:
+        return f"{level} is too short to be a save"
+    magic = header[8:11]
+    if magic != container.MAGIC_OODLE:
+        return None
+    return (
+        f"{level.name} uses the Oodle (PlM) container, and paleditor can only "
+        "write zlib (PlZ). Applying an edit would change the container format "
+        "of a live world. Run 'paleditor check-write', load the result on a "
+        "copy of the world to confirm the game accepts it, then set "
+        "[palworld] plz_write_confirmed = true."
+    )
 
 
 def _claim_queue(conn: sqlite3.Connection, batch_id: str) -> list[SlotEdit]:
@@ -419,7 +452,42 @@ def _integrity_problem(written: Path, backup: Path) -> str | None:
 
 
 def _atomic_replace(source: Path, target: Path) -> None:
-    """Rename into place, fsyncing the directory so the swap survives a crash."""
+    """Rename into place, carrying over the original's ownership and mode.
+
+    The replacement is a brand new inode owned by whoever paleditor runs as,
+    with that process's umask. The game server runs as a different user and has
+    to keep writing this file, so without copying the original's uid, gid and
+    mode across, the first maintenance window leaves a save the server can no
+    longer write. fsync of the directory makes the swap survive a crash.
+    """
+    try:
+        original = target.stat()
+    except FileNotFoundError:
+        original = None
+
+    if original is not None:
+        try:
+            os.chmod(source, stat.S_IMODE(original.st_mode))
+        except OSError as exc:
+            log.warning("could not copy mode onto the new save: %s", exc)
+        if (os.geteuid() == 0) or (
+            original.st_uid == os.geteuid() and original.st_gid in os.getgroups()
+        ):
+            try:
+                os.chown(source, original.st_uid, original.st_gid)
+            except OSError as exc:
+                log.warning("could not copy ownership onto the new save: %s", exc)
+        else:
+            current = os.stat(source)
+            if (current.st_uid, current.st_gid) != (original.st_uid, original.st_gid):
+                log.warning(
+                    "the new %s will be owned by %s:%s rather than %s:%s; the game "
+                    "server may be unable to write its own save. Run paleditor as a "
+                    "user that can restore the original ownership.",
+                    target.name, current.st_uid, current.st_gid,
+                    original.st_uid, original.st_gid,
+                )
+
     os.replace(source, target)
     dir_fd = os.open(target.parent, os.O_RDONLY)
     try:
@@ -461,8 +529,19 @@ def _verify(config: Config, conn: sqlite3.Connection, report: WindowReport) -> N
         ).fetchone()
         wanted_clear = row["item_id"] is None or row["stack_count"] <= 0
         if actual is None:
-            _mark_failed(conn, row["id"], "slot not present after the write")
-            report.failed += 1
+            # The save stores only occupied slots, so a cleared slot correctly
+            # disappears. Absence is success for a clear and failure otherwise.
+            if wanted_clear:
+                with db.transaction(conn):
+                    conn.execute(
+                        "UPDATE pending_edits SET status='applied', applied_at=?, "
+                        "error=NULL WHERE id=?",
+                        (db.utcnow(), row["id"]),
+                    )
+                applied += 1
+            else:
+                _mark_failed(conn, row["id"], "slot not present after the write")
+                report.failed += 1
             continue
         if wanted_clear:
             matched = actual["item_id"] is None and actual["stack_count"] == 0

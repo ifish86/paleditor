@@ -64,10 +64,13 @@ def _run(config: Config, conn: sqlite3.Connection) -> IngestResult:
     backend = _backend_for(config)
     # Prefer a completed snapshot. Reading the live file while the server is
     # writing it returns a torn save, which is the single easiest way to ingest
-    # a world that never existed.
-    source = savesource.pick(
-        config.palworld.save_dir, prefer_backup=config.palworld.read_from_backup
+    # a world that never existed. The fixture backend has no server behind it,
+    # so there is nothing to race and nothing to warn about.
+    prefer_backup = (
+        config.palworld.read_from_backup
+        and config.palworld.save_backend != "fixture"
     )
+    source = savesource.pick(config.palworld.save_dir, prefer_backup=prefer_backup)
     level = source.level_sav
     started = time.monotonic()
     log.info("ingesting from %s (%s)", level, source.label)

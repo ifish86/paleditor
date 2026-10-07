@@ -197,21 +197,53 @@ def test_refuses_a_lock_file_in_an_unwritable_directory(
         blocked.chmod(0o700)
 
 
-def test_an_unset_lock_file_is_still_validated(
+def test_an_unset_lock_file_sits_beside_the_database(
     friend_hash, owner_hash, save_dir, tmp_path
 ):
-    """The default points at /var/lib/paleditor, which is usually not writable
-    by a developer running check-config locally. It must be reported, not
-    discovered when the first window crashes."""
+    """The lock has to follow the configured state, not a fixed system path.
+
+    It used to default to /var/lib/paleditor/maintenance.lock regardless of
+    where the database lived, so a config that set every path it was asked for
+    still failed validation on a path it was never told about.
+    """
     raw = base_raw(friend_hash, owner_hash, save_dir, tmp_path)
     raw["maintenance"].pop("lock_file", None)
-    import os
+    config = from_dict(raw)
+    assert config.maintenance.lock_file == config.database.path.parent / "maintenance.lock"
 
-    default_parent = MaintenanceConfig().lock_file.parent
-    if default_parent.is_dir() and os.access(default_parent, os.W_OK | os.X_OK):
-        pytest.skip(f"{default_parent} happens to be writable here")
-    with pytest.raises(ConfigError, match="lock_file"):
-        from_dict(raw)
+
+def test_an_explicit_lock_file_is_honoured(
+    friend_hash, owner_hash, save_dir, tmp_path
+):
+    chosen = tmp_path / "elsewhere" / "window.lock"
+    chosen.parent.mkdir()
+    raw = base_raw(
+        friend_hash, owner_hash, save_dir, tmp_path,
+        maintenance={"lock_file": str(chosen)},
+    )
+    assert from_dict(raw).maintenance.lock_file == chosen
+
+
+def test_the_readme_quick_start_config_validates(
+    friend_hash, owner_hash, save_dir, tmp_path
+):
+    """The quick start sets save_dir, backup_dir and the database path, and
+    nothing else. Following it verbatim must not hit a validation error."""
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    config = from_dict(
+        {
+            "server": {"listen": ["127.0.0.1:8080"]},
+            "auth": {
+                "password_hash": friend_hash,
+                "owner_password_hash": owner_hash,
+            },
+            "palworld": {"save_dir": str(save_dir), "save_backend": "fixture"},
+            "maintenance": {"backup_dir": str(tmp_path / "backups")},
+            "database": {"path": str(db_dir / "paleditor.db")},
+        }
+    )
+    assert config.maintenance.lock_file == db_dir / "maintenance.lock"
 
 
 # -- rcon secret -----------------------------------------------------------

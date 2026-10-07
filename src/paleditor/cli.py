@@ -232,6 +232,8 @@ def _check_config(args) -> int:
     print(f"  backend      : {config.palworld.save_backend}")
     print(f"  schedule     : {config.maintenance.schedule}")
     print(f"  database     : {config.database.path}")
+    print(f"  backups      : {config.maintenance.backup_dir}")
+    print(f"  window lock  : {config.maintenance.lock_file}")
     from .scheduler import CronSchedule
     from datetime import datetime
 

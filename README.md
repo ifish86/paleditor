@@ -99,6 +99,9 @@ CONF
 The API is then on <http://127.0.0.1:8080>, with docs at `/docs`. Sign in with
 `friendpw`, or `ownerpw` for the owner-gated endpoints.
 
+`check-config` prints every path it resolved, including the maintenance lock,
+which defaults to sitting beside the database.
+
 ### The frontend
 
 ```bash
@@ -162,7 +165,8 @@ It refuses to start, rather than starting unsafely, when:
 - `password_hash` or `owner_password_hash` is unset, looks like plaintext, or
   the two are identical
 - `save_dir` holds no readable `Level.sav`
-- `backup_dir` or the database directory is not writable
+- `backup_dir`, the database directory, or an explicitly configured
+  `lock_file` directory is not writable
 - `rcon_password_file` is group- or world-readable
 - `schedule` is not a valid five-field cron expression
 - the maintenance lockfile's directory is not writable

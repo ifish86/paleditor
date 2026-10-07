@@ -12,7 +12,7 @@ import os
 import re
 import stat
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .errors import ConfigError
@@ -30,6 +30,8 @@ _PLAINTEXT_HASH_HINT = re.compile(r"^\$argon2(id|i|d)\$")
 # A cron expression with five fields. Enough to reject typos at startup; the
 # scheduler does the real parsing.
 _CRON_RE = re.compile(r"^\s*(\S+\s+){4}\S+\s*$")
+
+LOCK_FILE_NAME = "maintenance.lock"
 
 
 @dataclass(frozen=True)
@@ -113,7 +115,12 @@ class MaintenanceConfig:
     # Set false to let the scheduled window run unattended; the manual
     # endpoint always requires the owner password regardless.
     enabled: bool = True
-    lock_file: Path = Path("/var/lib/paleditor/maintenance.lock")
+    # Where the exclusive window lock lives. Left unset it sits beside the
+    # database, because that is a directory the deployment already has to be
+    # able to write. Hardcoding /var/lib/paleditor made this the one path that
+    # did not follow the rest of the configured state, so a config that
+    # otherwise validated failed here.
+    lock_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -291,9 +298,10 @@ def _validate_maintenance(mw: MaintenanceConfig, *, check_paths: bool) -> None:
         # The window takes this lock before anything else, so an unwritable
         # location here means every window fails at runtime on a config that
         # otherwise validates.
-        _validate_writable_dir(
-            mw.lock_file.parent, "[maintenance] lock_file directory"
-        )
+        if mw.lock_file is not None:
+            _validate_writable_dir(
+                mw.lock_file.parent, "[maintenance] lock_file directory"
+            )
 
 
 def load(path: str | os.PathLike[str], *, check_paths: bool = True) -> Config:
@@ -374,7 +382,10 @@ def from_dict(
             mw_raw.get("shutdown_timeout_seconds", defaults.shutdown_timeout_seconds)
         ),
         enabled=bool(mw_raw.get("enabled", defaults.enabled)),
-        lock_file=Path(mw_raw.get("lock_file", defaults.lock_file)).expanduser(),
+        lock_file=(
+            Path(mw_raw["lock_file"]).expanduser()
+            if mw_raw.get("lock_file") else None
+        ),
     )
 
     db_raw = raw.get("database") or {}
@@ -382,12 +393,19 @@ def from_dict(
         path=Path(db_raw.get("path", DatabaseConfig().path)).expanduser()
     )
 
+    # Resolve the lock location before validating, so an unset one is checked
+    # where it will actually be created.
+    if maintenance.lock_file is None:
+        maintenance = replace(
+            maintenance, lock_file=database.path.parent / LOCK_FILE_NAME
+        )
+
     _validate_server(server)
     _validate_auth(auth)
     _validate_palworld(palworld, check_paths=check_paths)
-    _validate_maintenance(maintenance, check_paths=check_paths)
     if check_paths:
         _validate_writable_dir(database.path.parent, "[database] path")
+    _validate_maintenance(maintenance, check_paths=check_paths)
 
     return Config(
         server=server,

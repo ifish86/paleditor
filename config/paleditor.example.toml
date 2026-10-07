@@ -55,7 +55,10 @@ backup_count = 10
 # The window does not trust the countdown; it polls for the PID to disappear.
 shutdown_timeout_seconds = 180
 enabled = true
-lock_file = "/var/lib/paleditor/maintenance.lock"
+
+# The exclusive window lock. Left unset it sits beside the database, which is
+# usually what you want; set it only to put the lock somewhere else.
+# lock_file = "/var/lib/paleditor/maintenance.lock"
 
 [database]
 path = "/var/lib/paleditor/paleditor.db"

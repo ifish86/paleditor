@@ -201,3 +201,73 @@ def test_an_unhardened_unit_skips_the_path_coverage_checks(config, tmp_path):
     unit = tmp_path / "paleditor.service"
     unit.write_text("[Service]\nUser=root\nExecStart=/bin/true\n")
     assert errors(check(config, unit)) == []
+
+
+# -- reaching the save at all ----------------------------------------------
+
+
+def test_a_locked_down_home_blocks_everything_beneath_it(tmp_path):
+    """The real failure: /home/palworld at 0700.
+
+    Group membership does not help, because the group has no execute bit to
+    traverse with, and nothing below it can grant what the walk never reaches.
+    """
+    import os
+
+    from paleditor.servicecheck import _first_untraversable
+
+    home = tmp_path / "palworld"
+    deep = home / "palworld-server" / "Pal" / "Saved" / "SaveGames" / "0" / "WORLD"
+    deep.mkdir(parents=True)
+
+    # Let a foreign uid walk as far as the simulated home, so the blocker the
+    # check reports is the home itself rather than a pytest temp directory.
+    # Only directories this test actually owns; /tmp itself belongs to root.
+    chain = [
+        p for p in [tmp_path, *tmp_path.parents]
+        if str(p).startswith("/tmp/") and p.stat().st_uid == os.getuid()
+    ]
+    original = {p: p.stat().st_mode & 0o7777 for p in chain}
+    try:
+        for p in chain:
+            p.chmod(original[p] | 0o011)
+        home.chmod(0o700)
+        for sub in (home / "palworld-server",):
+            sub.chmod(0o775)
+
+        foreign_uid = os.getuid() + 1000
+        blocker = _first_untraversable(deep, foreign_uid, groups=set())
+        assert blocker is not None
+        assert blocker[0] == home.resolve()
+        assert blocker[1] == 0o700
+
+        # Granting the group the execute bit is what unblocks it.
+        home.chmod(0o710)
+        assert _first_untraversable(deep, foreign_uid, groups={home.stat().st_gid}) is None
+    finally:
+        home.chmod(0o755)
+        for p, mode in original.items():
+            p.chmod(mode)
+
+
+def test_the_owner_of_the_save_can_always_reach_it(tmp_path):
+    import os
+
+    from paleditor.servicecheck import _first_untraversable
+
+    deep = tmp_path / "home" / "world"
+    deep.mkdir(parents=True)
+    (tmp_path / "home").chmod(0o700)
+    assert _first_untraversable(deep, os.getuid(), groups=set()) is None
+
+
+def test_root_is_never_blocked(tmp_path):
+    from paleditor.servicecheck import _first_untraversable
+
+    deep = tmp_path / "home" / "world"
+    deep.mkdir(parents=True)
+    (tmp_path / "home").chmod(0o000)
+    try:
+        assert _first_untraversable(deep, 0, groups=set()) is None
+    finally:
+        (tmp_path / "home").chmod(0o755)

@@ -6,14 +6,24 @@ stop the game unit, and an RCON connection on localhost.
 
 ## Install
 
-```bash
-# A dedicated user that shares the game's group for save access.
-useradd --system --home /opt/paleditor --shell /usr/sbin/nologin paleditor
-usermod -aG palworld paleditor
+paleditor runs as the **game server's own user**. That is not laziness about
+isolation; it is the only arrangement that works without extra machinery:
 
-install -d -o paleditor -g paleditor /opt/paleditor /var/lib/paleditor
-install -d -o paleditor -g paleditor /var/lib/paleditor/backups
-install -d -o root -g paleditor -m 750 /etc/paleditor
+- The save normally lives in that user's home, which is `0700` on a stock
+  setup. No other account can traverse into it, and permissions further down
+  are irrelevant because the walk never gets that far.
+- Whoever writes `Level.sav` owns the replacement. Running as anyone else
+  leaves the save owned by the wrong user after the first maintenance window,
+  and the game server can then no longer write its own save.
+
+A separate service account is possible; see
+[Using a separate service account](#using-a-separate-service-account) for the
+two extra things it needs.
+
+```bash
+install -d -o palworld -g palworld /opt/paleditor /var/lib/paleditor
+install -d -o palworld -g palworld /var/lib/paleditor/backups
+install -d -o root -g palworld -m 750 /etc/paleditor
 
 git clone git@github.com:ifish86/paleditor.git /opt/paleditor
 cd /opt/paleditor
@@ -57,7 +67,7 @@ exactly that with a polkit rule rather than full sudo:
 // /etc/polkit-1/rules.d/50-paleditor.rules
 polkit.addRule(function (action, subject) {
   if (action.id === "org.freedesktop.systemd1.manage-units" &&
-      subject.user === "paleditor") {
+      subject.user === "palworld") {
     var unit = action.lookup("unit");
     if (unit === "palworld.service") {
       var verb = action.lookup("verb");
@@ -124,6 +134,33 @@ says so on stderr. For both, either run a second unit with a config whose
 `listen` starts with the other address, or put a reverse proxy in front. The
 config still validates every entry, so a public address is refused in either
 case unless `allow_public` is true.
+
+## Using a separate service account
+
+Running paleditor under its own account is possible, but it needs two things
+the default arrangement gets for free. `paleditor check-service` reports both.
+
+1. **Traversal into the save.** A stock game user's home is `0700`, which stops
+   every other account at the front door:
+
+   ```bash
+   chmod g+x /home/palworld          # group needs the execute bit to pass through
+   usermod -aG palworld paleditor
+   ```
+
+   `g+x` without `g+r` is enough: it allows passing through the directory
+   without allowing it to be listed.
+
+2. **Ownership after a write.** The maintenance window replaces `Level.sav`
+   with a new file owned by whoever wrote it. paleditor copies the original's
+   owner and mode onto the replacement, but `chown` to another user requires
+   root, so running as a non-root, non-owning account leaves the save belonging
+   to the service and the game server unable to write it. Either make the save
+   group-writable and accept that the group owns it, or do not use a separate
+   account.
+
+Then set `User=` and `Group=` in the unit accordingly and re-run
+`paleditor check-service`.
 
 ## First ingest
 

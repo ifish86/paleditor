@@ -1,6 +1,6 @@
 # paleditor, running beside the game server on the same VPS.
 #
-#   install -d -o paleditor -g paleditor /var/lib/paleditor
+#   install -d -o palworld -g palworld /var/lib/paleditor
 #   cp config/paleditor.service /etc/systemd/system/
 #   # EDIT ReadWritePaths BELOW BEFORE STARTING - see the note there
 #   systemctl daemon-reload && systemctl enable --now paleditor
@@ -16,9 +16,20 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=paleditor
-# Needs to read and write the save directory, so it shares the game's group.
-SupplementaryGroups=palworld
+# Runs as the game server's own user, which is the simplest arrangement that
+# actually works:
+#
+#   * the save usually sits in that user's home, which is mode 0700 on a
+#     stock setup, so no other user can even traverse into it
+#   * whoever writes Level.sav owns the replacement. Running as anyone else
+#     leaves the save owned by the wrong user after the first maintenance
+#     window, and the game server then cannot write its own save
+#
+# To use a separate service account instead, see docs/deployment.md: it needs
+# the execute bit on the game user's home and a way to restore the save's
+# ownership after a write.
+User=palworld
+Group=palworld
 WorkingDirectory=/opt/paleditor
 ExecStart=/opt/paleditor/.venv/bin/paleditor serve -c /etc/paleditor/paleditor.toml
 Restart=on-failure

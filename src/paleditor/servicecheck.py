@@ -201,6 +201,40 @@ def check(config: Config, unit_path: Path = DEFAULT_UNIT) -> list[Finding]:
     return findings
 
 
+def _first_untraversable(
+    target: Path, uid: int, groups: set[int]
+) -> tuple[Path, int] | None:
+    """The highest ancestor the given user cannot cd into, if any.
+
+    Reaching a file needs the execute bit on every directory along the way,
+    which is a separate question from the permissions on the file itself and
+    the one most easily missed.
+    """
+    try:
+        resolved = target.resolve()
+    except OSError:
+        resolved = Path(os.path.abspath(target))
+    for path in list(reversed(resolved.parents)) + [resolved]:
+        try:
+            info = path.stat()
+        except OSError:
+            # Cannot stat it, which usually means the blocker is further up and
+            # has already been reported.
+            return None
+        mode = info.st_mode & 0o777
+        if uid == 0:
+            continue
+        if info.st_uid == uid:
+            allowed = bool(mode & 0o100)
+        elif info.st_gid in groups:
+            allowed = bool(mode & 0o010)
+        else:
+            allowed = bool(mode & 0o001)
+        if not allowed:
+            return (path, mode)
+    return None
+
+
 def _check_user(user: str, directives: dict[str, list[str]], config: Config) -> list[Finding]:
     import grp
     import pwd
@@ -231,6 +265,24 @@ def _check_user(user: str, directives: dict[str, list[str]], config: Config) -> 
                     Finding("error", f"SupplementaryGroups names {name!r}, which does not exist")
                 )
 
+    # Every ancestor needs the execute bit before the save itself matters.
+    # A home directory at 0700 stops the walk dead, and no amount of group
+    # membership or permissions further down makes any difference.
+    blocker = _first_untraversable(config.palworld.save_dir, entry.pw_uid, groups)
+    if blocker is not None:
+        path, mode = blocker
+        findings.append(
+            Finding(
+                "error",
+                f"user {user!r} cannot traverse {path} (mode {mode:04o}), so it "
+                f"cannot reach {config.palworld.save_dir} no matter what the "
+                "permissions below it are. Either grant the group the execute "
+                f"bit (chmod g+x {path}) or run the unit as the user that owns "
+                "the save.",
+            )
+        )
+        return findings
+
     save_dir = config.palworld.save_dir
     try:
         info = save_dir.stat()
@@ -243,6 +295,27 @@ def _check_user(user: str, directives: dict[str, list[str]], config: Config) -> 
     writable = bool(info.st_mode & 0o002) or (
         info.st_gid in groups and info.st_mode & 0o020
     ) or info.st_uid == entry.pw_uid
+
+    # Whoever writes Level.sav owns the replacement. If that is not the user
+    # the game server runs as, the game cannot write its own save after the
+    # first maintenance window, and paleditor can only put the ownership back
+    # when it runs as root or already owns the file.
+    if info.st_uid != entry.pw_uid:
+        import pwd as _pwd
+
+        try:
+            owner = _pwd.getpwuid(info.st_uid).pw_name
+        except KeyError:
+            owner = str(info.st_uid)
+        findings.append(
+            Finding(
+                "warning",
+                f"the save is owned by {owner!r} but the unit runs as {user!r}. "
+                "After a maintenance window the new Level.sav would belong to "
+                f"{user!r}, and the game server may no longer be able to write "
+                f"it. Running the unit as {owner!r} avoids this entirely.",
+            )
+        )
 
     if not readable:
         findings.append(

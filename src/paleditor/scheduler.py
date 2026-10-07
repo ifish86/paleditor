@@ -110,6 +110,50 @@ class CronSchedule:
         return dom_ok and dow_ok
 
 
+class IntervalWorker:
+    """Runs a callback every N seconds on a daemon thread.
+
+    Used for periodic ingest. Deliberately separate from WindowScheduler: one
+    answers "is it 5am yet", the other "has it been five minutes", and mixing
+    them made neither readable.
+    """
+
+    def __init__(self, interval_seconds: float, callback, *, name: str):
+        self.interval_seconds = interval_seconds
+        self.callback = callback
+        self.name = name
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._loop, name=f"paleditor-{self.name}", daemon=True
+        )
+        self._thread.start()
+        log.info("%s worker started; every %ss", self.name, self.interval_seconds)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10.0)
+            self._thread = None
+
+    def _loop(self) -> None:
+        # Run once at startup so a fresh service has data without waiting out
+        # the first interval.
+        while True:
+            try:
+                self.callback()
+            except Exception:
+                # A failing tick must not kill the thread, or the data silently
+                # stops refreshing for as long as the process lives.
+                log.exception("%s worker tick failed", self.name)
+            if self._stop.wait(self.interval_seconds):
+                return
+
+
 class WindowScheduler:
     """A daemon thread that fires the maintenance window on schedule.
 

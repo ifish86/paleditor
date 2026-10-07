@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from . import db
 from .config import Config
 from .errors import MaintenanceError, PaleditorError, SaveFormatError, WindowBusy
-from .scheduler import WindowScheduler
+from .scheduler import IntervalWorker, WindowScheduler
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +27,15 @@ def create_app(config: Config, *, start_scheduler: bool = True) -> FastAPI:
     async def lifespan(app: FastAPI):
         db.init(config.database.path)
         _seed_items(config)
+        ingest_worker = None
+        if config.ingest.enabled:
+            ingest_worker = IntervalWorker(
+                config.ingest.interval_seconds,
+                lambda: _periodic_ingest(config),
+                name="ingest",
+            )
+            ingest_worker.start()
+        app.state.ingest_worker = ingest_worker
         scheduler = None
         if start_scheduler and config.maintenance.enabled:
             scheduler = WindowScheduler(
@@ -46,6 +55,8 @@ def create_app(config: Config, *, start_scheduler: bool = True) -> FastAPI:
         finally:
             if scheduler is not None:
                 scheduler.stop()
+            if ingest_worker is not None:
+                ingest_worker.stop()
 
     app = FastAPI(
         title="paleditor",
@@ -133,6 +144,33 @@ def _seed_items(config: Config) -> None:
     with db.closing_connect(config.database.path) as conn:
         count = catalog.seed(conn)
     log.info("seeded %s item(s) into the catalogue", count)
+
+
+def _periodic_ingest(config: Config) -> None:
+    """Reread the world on a timer.
+
+    Without this the database only moves when somebody runs ingest by hand: the
+    maintenance window reingests as its verification step, but it returns early
+    when the queue is empty, which is most nights.
+    """
+    from . import ingest
+    from .locking import FileLock
+
+    if FileLock(config.maintenance.lock_file).is_locked():
+        log.debug("maintenance window running; skipping this ingest")
+        return
+    try:
+        result = ingest.run_if_changed(config)
+    except Exception as exc:
+        # Logged, not raised: a game update that breaks the parse must leave
+        # the last good rev being served with a warning, not kill the worker.
+        log.warning("periodic ingest failed: %s", exc)
+        return
+    if result is not None:
+        log.info(
+            "ingest rev %s: %s chests across %s bases in %sms",
+            result.rev, result.chest_count, result.base_count, result.duration_ms,
+        )
 
 
 def _scheduled_window(config: Config) -> None:

@@ -60,5 +60,17 @@ enabled = true
 # usually what you want; set it only to put the lock somewhere else.
 # lock_file = "/var/lib/paleditor/maintenance.lock"
 
+[ingest]
+# How often to reread the world. Without this the database only changes when
+# somebody runs 'paleditor ingest' by hand: the maintenance window reingests as
+# its verification step, but it returns early when the queue is empty, which is
+# most nights.
+#
+# A pass is skipped when the save is byte-identical to the last one read, so an
+# idle world costs a checksum rather than a parse. Minimum 60 seconds; the
+# server only writes a new snapshot every 30 or so.
+enabled = true
+interval_seconds = 300
+
 [database]
 path = "/var/lib/paleditor/paleditor.db"

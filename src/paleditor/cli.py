@@ -167,6 +167,8 @@ def _load(args, *, check_paths: bool = True):
 
 
 def _serve(args) -> int:
+    import socket
+
     import uvicorn
 
     from .app import create_app
@@ -174,17 +176,46 @@ def _serve(args) -> int:
     config = _load(args)
     app = create_app(config, start_scheduler=not args.no_scheduler)
 
-    # uvicorn binds one address per run, so additional listen entries are
-    # reported rather than silently ignored.
-    first = config.server.listen[0]
-    if len(config.server.listen) > 1:
-        print(
-            f"note: binding {first} only. uvicorn takes one address; run one "
-            "unit per listen entry, or put a reverse proxy in front.",
-            file=sys.stderr,
-        )
-    uvicorn.run(app, host=first.host, port=first.port, log_config=None)
+    # uvicorn's host/port arguments take one address, but Server.run accepts a
+    # list of already-bound sockets, so every configured listen entry is served
+    # by the one process. That matters because the second entry is typically
+    # the VPN address the friend group actually connects to.
+    sockets = []
+    for address in config.server.listen:
+        try:
+            sockets.append(_bind(address))
+        except OSError as exc:
+            for opened in sockets:
+                opened.close()
+            print(f"error: cannot bind {address}: {exc}", file=sys.stderr)
+            return 1
+
+    server = uvicorn.Server(uvicorn.Config(app, log_config=None))
+    bound = ", ".join(str(a) for a in config.server.listen)
+    print(f"listening on {bound}", file=sys.stderr)
+    try:
+        server.run(sockets=sockets)
+    finally:
+        for opened in sockets:
+            opened.close()
     return 0
+
+
+def _bind(address) -> "socket.socket":
+    """Open a listening socket for one configured address."""
+    import socket
+
+    family = socket.AF_INET6 if ":" in address.host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if family == socket.AF_INET6:
+        # One socket per configured address, so a v6 socket must not quietly
+        # also claim the v4 wildcard.
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+    sock.bind((address.host, address.port))
+    sock.listen(2048)
+    sock.set_inheritable(True)
+    return sock
 
 
 def _ingest(args) -> int:

@@ -124,6 +124,23 @@ class MaintenanceConfig:
 
 
 @dataclass(frozen=True)
+class IngestConfig:
+    """How often to reread the world.
+
+    Without this the database only changes when somebody runs 'paleditor
+    ingest' by hand: the maintenance window reingests as its verification step,
+    but it returns early when the queue is empty, which is most nights. A
+    read-mostly app whose numbers never move is not much use.
+    """
+
+    enabled: bool = True
+    interval_seconds: int = 300
+    # Parsing is cheap (a few seconds) but not free, and the server only writes
+    # a new snapshot every ~30s, so anything under a minute is pure waste.
+    MINIMUM_INTERVAL = 60
+
+
+@dataclass(frozen=True)
 class DatabaseConfig:
     path: Path = Path("/var/lib/paleditor/paleditor.db")
 
@@ -135,6 +152,7 @@ class Config:
     palworld: PalworldConfig
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    ingest: IngestConfig = field(default_factory=IngestConfig)
     source_path: Path | None = None
 
 
@@ -346,7 +364,9 @@ def from_dict(
     source_path: Path | None = None,
     check_paths: bool = True,
 ) -> Config:
-    unknown = set(raw) - {"server", "auth", "palworld", "maintenance", "database"}
+    unknown = set(raw) - {
+        "server", "auth", "palworld", "maintenance", "database", "ingest",
+    }
     if unknown:
         raise ConfigError(
             f"unknown config section(s): {', '.join(sorted(unknown))}"
@@ -406,6 +426,19 @@ def from_dict(
         ),
     )
 
+    ingest_raw = raw.get("ingest") or {}
+    ingest_cfg = IngestConfig(
+        enabled=bool(ingest_raw.get("enabled", True)),
+        interval_seconds=int(ingest_raw.get("interval_seconds", 300)),
+    )
+    if ingest_cfg.enabled and ingest_cfg.interval_seconds < IngestConfig.MINIMUM_INTERVAL:
+        raise ConfigError(
+            f"[ingest] interval_seconds must be at least "
+            f"{IngestConfig.MINIMUM_INTERVAL}; the server only writes a new "
+            "save snapshot every 30 seconds or so, and parsing more often than "
+            "that just burns CPU"
+        )
+
     db_raw = raw.get("database") or {}
     database = DatabaseConfig(
         path=Path(db_raw.get("path", DatabaseConfig().path)).expanduser()
@@ -431,5 +464,6 @@ def from_dict(
         palworld=palworld,
         maintenance=maintenance,
         database=database,
+        ingest=ingest_cfg,
         source_path=source_path,
     )

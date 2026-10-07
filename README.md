@@ -197,6 +197,24 @@ It refuses to start, rather than starting unsafely, when:
 - `schedule` is not a valid five-field cron expression
 - the maintenance lockfile's directory is not writable
 
+## Keeping the data fresh
+
+An ingest worker rereads the world every `[ingest] interval_seconds` (default
+300), starting as soon as the service comes up. A pass whose save is
+byte-identical to the last one read is skipped, so an idle world costs a
+checksum rather than a parse.
+
+This is not optional housekeeping: the maintenance window reingests only as its
+verification step and returns early when the queue is empty, so without the
+worker the database would only move when somebody ran `paleditor ingest` by
+hand.
+
+## Listening on more than one address
+
+`listen` takes a list and every entry is bound by the one process, so the
+loopback and VPN addresses in the example config are both served. A public
+address still needs `allow_public = true`.
+
 ## Reading the right file
 
 The server rewrites `Level.sav` roughly every 30 seconds, so reading it live can

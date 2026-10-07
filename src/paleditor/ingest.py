@@ -47,6 +47,45 @@ class IngestResult:
     orphaned: int
 
 
+def run_if_changed(
+    config: Config, *, conn: sqlite3.Connection | None = None
+) -> IngestResult | None:
+    """Ingest only when the save actually differs from the last good rev.
+
+    The periodic worker calls this. Hashing a couple of megabytes costs
+    milliseconds, where a parse costs seconds, and a world nobody is playing in
+    produces identical snapshots indefinitely.
+    """
+    from .saves.base import sha256_file
+
+    own_conn = conn is None
+    if own_conn:
+        db.init(config.database.path)
+        conn = db.connect(config.database.path)
+    try:
+        source = _pick_source(config)
+        try:
+            digest = sha256_file(source.level_sav)
+        except OSError as exc:
+            raise SaveFormatError(f"cannot read {source.level_sav}: {exc}") from exc
+        previous = db.latest_ingest(conn)
+        if previous is not None and previous["save_sha256"] == digest:
+            log.debug("save unchanged (%s); skipping ingest", digest[:12])
+            return None
+        return _run(config, conn)
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _pick_source(config: Config):
+    prefer_backup = (
+        config.palworld.read_from_backup
+        and config.palworld.save_backend != "fixture"
+    )
+    return savesource.pick(config.palworld.save_dir, prefer_backup=prefer_backup)
+
+
 def run(config: Config, *, conn: sqlite3.Connection | None = None) -> IngestResult:
     """Parse the save and write a new rev. Raises on any format mismatch."""
     own_conn = conn is None
@@ -66,11 +105,7 @@ def _run(config: Config, conn: sqlite3.Connection) -> IngestResult:
     # writing it returns a torn save, which is the single easiest way to ingest
     # a world that never existed. The fixture backend has no server behind it,
     # so there is nothing to race and nothing to warn about.
-    prefer_backup = (
-        config.palworld.read_from_backup
-        and config.palworld.save_backend != "fixture"
-    )
-    source = savesource.pick(config.palworld.save_dir, prefer_backup=prefer_backup)
+    source = _pick_source(config)
     level = source.level_sav
     started = time.monotonic()
     log.info("ingesting from %s (%s)", level, source.label)

@@ -130,12 +130,14 @@ save directory under `/home` is fine.
 
 ### Listening on more than one address
 
-The example config lists two addresses, loopback and a VPN address. uvicorn
-binds one address per process, so `paleditor serve` uses the first entry and
-says so on stderr. For both, either run a second unit with a config whose
-`listen` starts with the other address, or put a reverse proxy in front. The
-config still validates every entry, so a public address is refused in either
-case unless `allow_public` is true.
+Every entry in `listen` is bound by the one process, so the loopback and VPN
+addresses in the example config are both served. A public address is still
+refused unless `allow_public` is true.
+
+If a bind fails — a typo'd address, a port already taken, a VPN interface that
+has not come up yet — the service exits with which address it could not bind
+rather than starting half-served. For an address that appears late, order the
+unit after the interface is up.
 
 ## Using a separate service account
 
@@ -171,10 +173,14 @@ sudo -u paleditor /opt/paleditor/.venv/bin/paleditor \
   -c /etc/paleditor/paleditor.toml ingest
 ```
 
-Reading a save file while the server is writing it is a real hazard. Until
-that question is settled (it is open in the proposal), run the first ingest
-while the server is stopped, and let the window's step 7 handle reingests
-afterwards.
+Reading a save file while the server is writing it is a real hazard, which is
+why ingest reads a completed snapshot from `backup/world/` rather than the live
+file.
+
+After this, the service keeps itself current: an ingest worker rereads the
+world every `[ingest] interval_seconds`, skipping any pass whose save is
+unchanged. The maintenance window is not what refreshes the data — it reingests
+only to verify its own writes, and returns early when the queue is empty.
 
 Measure the parse. If it exceeds the window, move to an incremental reader
 before adding features.

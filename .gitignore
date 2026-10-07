@@ -1,0 +1,124 @@
+# --- Palworld save data ---------------------------------------------------
+# paleditor runs next to a live save directory, and the fixture backend reads a
+# Level.sav that is really JSON. Neither belongs in git: a world is hundreds of
+# megabytes, it is not ours to publish, and it holds every player's inventory.
+*.sav
+*.sav.*
+*.sav.sha256
+Level.sav
+LevelMeta.sav
+WorldOption.sav
+Players/
+backups/
+*.sav.tmp
+*.paleditor-*.tmp
+
+# --- Secrets and local configuration -------------------------------------
+# Only paleditor.example.toml is committed. A real config carries argon2
+# hashes, and rcon.secret carries the RCON password in plain text.
+paleditor.toml
+*.secret
+rcon.secret
+config/*.toml
+!config/paleditor.example.toml
+.env
+.env.*
+!.env.example
+
+# --- Database -------------------------------------------------------------
+# Rebuilt by ingest, except for the app-owned tables, which are backed up
+# separately rather than committed.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+paleditor.db*
+
+# --- Runtime state --------------------------------------------------------
+*.lock
+!package-lock.json
+!yarn.lock
+*.pid
+*.log
+logs/
+
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Testing and type checking
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.cache
+.hypothesis/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.ruff_cache/
+
+# --- Node and Quasar ------------------------------------------------------
+node_modules/
+.quasar/
+frontend/dist/
+frontend/.quasar/
+frontend/node_modules/
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# --- Editors and operating systems ---------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# --- Scratch --------------------------------------------------------------
+tmp/
+scratch/
+*.bak
+*.orig
+*.rej

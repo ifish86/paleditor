@@ -47,9 +47,11 @@ cp config/paleditor.example.toml /etc/paleditor/paleditor.toml
 .venv/bin/paleditor hash-password      # -> auth.owner_password_hash
 
 # The RCON password lives in its own file so the main config can stay
-# group-readable while the secret does not.
+# readable while the secret does not. It must be owned by the user the service
+# runs as: paleditor insists on mode 0600, and at 0600 the group grants
+# nothing, so a root-owned secret is one the service can never read.
 printf '%s' 'your-rcon-password' > /etc/paleditor/rcon.secret
-chown root:paleditor /etc/paleditor/rcon.secret
+chown palworld:palworld /etc/paleditor/rcon.secret
 chmod 600 /etc/paleditor/rcon.secret
 
 .venv/bin/paleditor check-config -c /etc/paleditor/paleditor.toml
@@ -215,6 +217,30 @@ disposable.
 sqlite3 /var/lib/paleditor/paleditor.db \
   ".dump chest_meta pending_edits" > /var/backups/paleditor-meta.sql
 ```
+
+## What sharing the game's user does and does not give up
+
+The service runs as `palworld`, so in principle it has that account's reach.
+In practice the sandbox does the confining, not the uid:
+
+- `ProtectSystem=strict` makes the entire filesystem read-only except what
+  `ReadWritePaths` and `StateDirectory` name, so the service can **write** only
+  `/var/lib/paleditor` and the `SaveGames` directory — not the server binaries,
+  not the rest of the home.
+- `NoNewPrivileges`, `PrivateTmp`, `RestrictSUIDSGID` and the kernel protections
+  apply the same way whichever user it runs as.
+
+What it does keep is **read** access to the game user's home, because
+`ProtectHome=read-only` permits reads. If that matters to you, hide the parts
+paleditor has no business seeing:
+
+```ini
+InaccessiblePaths=/home/palworld/Steam /home/palworld/.config /home/palworld/.local
+```
+
+Those are read-only already; this makes them absent from the service's view.
+Add them to the unit and re-run `paleditor check-service` to confirm nothing it
+needs got caught.
 
 ## Operating notes
 

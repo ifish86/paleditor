@@ -322,3 +322,31 @@ def test_load_reports_invalid_toml(tmp_path):
     path.write_text("[server\nlisten = nope")
     with pytest.raises(ConfigError, match="not valid TOML"):
         load(path)
+
+
+def test_refuses_an_rcon_secret_this_process_cannot_read(
+    friend_hash, owner_hash, save_dir, tmp_path
+):
+    """0600 and readable are different questions.
+
+    A secret owned by another user at 0600 is unreadable whatever group it
+    carries, and 0600 is the only mode this validator accepts, so the file has
+    to belong to whoever the service runs as. Documenting chown root:<group>
+    produced a file the service could never read.
+    """
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root can read anything")
+    secret = tmp_path / "rcon.secret"
+    secret.write_text("hunter2")
+    secret.chmod(0o000)  # 0600 for someone else looks like this from here
+    raw = base_raw(
+        friend_hash, owner_hash, save_dir, tmp_path,
+        palworld={"rcon_password_file": str(secret)},
+    )
+    try:
+        with pytest.raises(ConfigError, match="cannot read it"):
+            from_dict(raw)
+    finally:
+        secret.chmod(0o600)

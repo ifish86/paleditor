@@ -260,6 +260,24 @@ def _validate_palworld(pal: PalworldConfig, *, check_paths: bool) -> None:
                 "it holds a secret and must not be group- or world-readable "
                 "(chmod 600)."
             )
+        # 0600 and readable are two different questions. A secret owned by
+        # root at 0600 is unreadable by the service no matter which group it
+        # carries, and the only mode this validator accepts is 0600, so the
+        # file has to be owned by the user paleditor runs as.
+        if not os.access(secret, os.R_OK):
+            import pwd
+
+            try:
+                owner = pwd.getpwuid(secret.stat().st_uid).pw_name
+            except KeyError:
+                owner = str(secret.stat().st_uid)
+            raise ConfigError(
+                f"[palworld] rcon_password_file {secret} is mode {mode:04o} and "
+                f"owned by {owner!r}, so this process cannot read it. At 0600 "
+                "group ownership grants nothing; give the file to the user "
+                "paleditor runs as (chown <service-user> "
+                f"{secret})."
+            )
 
 
 def _validate_writable_dir(path: Path, label: str) -> None:

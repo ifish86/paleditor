@@ -135,6 +135,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--oodle-library", type=Path, default=None)
     p.set_defaults(handler=_check_write)
 
+    p = with_config(sub.add_parser(
+        "check-service",
+        help="check the installed systemd unit against this config",
+    ))
+    p.add_argument("--unit", type=Path, default=None,
+                   help="unit file (default: /etc/systemd/system/paleditor.service)")
+    p.set_defaults(handler=_check_service)
+
     p = with_config(sub.add_parser("init-db", help="create the database schema"))
     p.set_defaults(handler=_init_db)
 
@@ -429,6 +437,31 @@ def _check_write(args) -> int:
         "\nDo this on a copy of the world, or at a time you are happy to restore.\n"
         "Until it passes, leave the write path disabled."
     )
+    return 0
+
+
+def _check_service(args) -> int:
+    """Catch the unit/config mismatches that otherwise surface as 226/NAMESPACE."""
+    from .servicecheck import DEFAULT_UNIT, check
+
+    config = _load(args, check_paths=False)
+    unit = args.unit or DEFAULT_UNIT
+    findings = check(config, unit)
+
+    print(f"{unit}")
+    if not findings:
+        print("  ok: the unit matches this config")
+        return 0
+    errors = [f for f in findings if f.level == "error"]
+    for finding in findings:
+        mark = "ERROR  " if finding.level == "error" else "warning"
+        print(f"  {mark} {finding.message}")
+    if errors:
+        print(
+            f"\n{len(errors)} problem(s) would stop the service from starting "
+            "or from writing the save."
+        )
+        return 1
     return 0
 
 

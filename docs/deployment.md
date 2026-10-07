@@ -72,15 +72,49 @@ polkit.addRule(function (action, subject) {
 
 ## Run
 
+The unit ships with a placeholder that **must** be replaced before it will
+start. `ReadWritePaths` has to name the `SaveGames` directory holding your
+world — the part of `save_dir` above the world id:
+
 ```bash
 cp config/paleditor.service /etc/systemd/system/
+
+SAVEGAMES=/home/palworld/palworld-server/Pal/Saved/SaveGames   # yours will differ
+sed -i "s|/REPLACE-WITH-YOUR-SaveGames-DIRECTORY|$SAVEGAMES|" \
+  /etc/systemd/system/paleditor.service
+```
+
+Then check the unit against your config before starting anything:
+
+```bash
+paleditor check-service -c /etc/paleditor/paleditor.toml
+```
+
+That compares the unit's `ReadWritePaths`, `ExecStart` and `User` against the
+paths the config actually uses, and reports what would break. It exists
+because systemd's own failure for this is opaque:
+
+```
+Failed to set up mount namespacing: /home/.../SaveGames: No such file or directory
+Failed at step NAMESPACE spawning /opt/paleditor/.venv/bin/paleditor: No such file or directory
+status=226/NAMESPACE
+```
+
+The second line is misleading: the binary is fine. systemd builds the mount
+namespace before it runs anything, and **every path in `ReadWritePaths` must
+already exist**, or the whole unit fails. The path it names in the first line
+is the real problem.
+
+Once `check-service` is clean:
+
+```bash
 systemctl daemon-reload
 systemctl enable --now paleditor
 journalctl -u paleditor -f
 ```
 
-Edit `ReadWritePaths` in the unit if the save directory is not under
-`/home/palworld/Pal/Saved/SaveGames`.
+`ReadWritePaths` overrides `ProtectHome=read-only` for the paths it lists, so a
+save directory under `/home` is fine.
 
 ### Listening on more than one address
 

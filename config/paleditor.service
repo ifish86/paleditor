@@ -2,7 +2,11 @@
 #
 #   install -d -o paleditor -g paleditor /var/lib/paleditor
 #   cp config/paleditor.service /etc/systemd/system/
+#   # EDIT ReadWritePaths BELOW BEFORE STARTING - see the note there
 #   systemctl daemon-reload && systemctl enable --now paleditor
+#
+# Check the unit against your config before starting it:
+#   paleditor check-service -c /etc/paleditor/paleditor.toml
 
 [Unit]
 Description=paleditor (Palworld chest browser)
@@ -20,8 +24,6 @@ ExecStart=/opt/paleditor/.venv/bin/paleditor serve -c /etc/paleditor/paleditor.t
 Restart=on-failure
 RestartSec=5
 
-# The window stops and starts the game unit. Grant exactly that, and nothing
-# more, with a polkit rule rather than full sudo; see docs/deployment.md.
 StateDirectory=paleditor
 RuntimeDirectory=paleditor
 
@@ -31,12 +33,32 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/paleditor /home/palworld/Pal/Saved/SaveGames
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
+
+# ---------------------------------------------------------------------------
+# EDIT THIS LINE. Replace the placeholder with the SaveGames directory holding
+# your world - the parent of the <world-id> folder, which is the part of
+# [palworld] save_dir above the world id. For example, if save_dir is
+#
+#   /home/palworld/palworld-server/Pal/Saved/SaveGames/0/ABC123...
+#
+# then put /home/palworld/palworld-server/Pal/Saved/SaveGames here.
+#
+# Every path listed must already exist. systemd sets up the mount namespace
+# before the service runs, so a path that is missing or misspelled fails the
+# whole unit with the rather unhelpful:
+#
+#   Failed to set up mount namespacing: ...: No such file or directory
+#   Failed at step NAMESPACE ... status=226/NAMESPACE
+#
+# ReadWritePaths overrides ProtectHome=read-only for the paths it lists, so a
+# save directory under /home is fine.
+# ---------------------------------------------------------------------------
+ReadWritePaths=/var/lib/paleditor /REPLACE-WITH-YOUR-SaveGames-DIRECTORY
 
 [Install]
 WantedBy=multi-user.target

@@ -79,6 +79,47 @@ The transform detail is a trap worth keeping: a base camp blob holds a *second*
 scale vector later on, preceded by what looks like a bounding box of
 `(-170, 0, 170)`. Scanning backwards puts every base at the same point.
 
+## When the parser meets something new
+
+The parser's last release was October 2024. This world has moved since, and it
+will keep moving. The most common way that surfaces is a scalar type inside a
+map that upstream's `prop_value` does not know:
+
+```
+Unknown property value type: Int64Property
+(.worldSaveData.LevelObjectRecoverPartySaveData.Value.PlayerLastUsedTimes.Value)
+```
+
+That is a map of player GUID to a 64-bit timestamp. It appeared in this world
+between September and October 2026 — an older copy of the same save parses
+without it — and that single unhandled type stopped the whole world loading.
+
+Upstream's `prop_value` handles only StructProperty, EnumProperty,
+NameProperty, IntProperty and BoolProperty.
+[`saves/gvas_compat.py`](../src/paleditor/saves/gvas_compat.py) adds the
+missing scalars to **both** the reader and the writer. Both, symmetrically: the
+write path depends on `GvasFile.write` reproducing its input byte for byte, so
+a type the reader understood and the writer did not would corrupt a world
+rather than fail to load one.
+
+Adding another is one line in `SCALAR_TYPES`, mapping the property name to the
+archive primitive that reads and writes it. **Only add types whose wire format
+is unambiguous** — fixed-width scalars and strings. That same table writes the
+save back, so a wrong guess is written into the world rather than merely
+misread. A type you are unsure of should keep raising.
+
+### Why unknown properties are not just skipped
+
+Every GVAS property carries a declared size, and skipping what you do not
+understand is the right instinct — it is what makes palstats' reader robust.
+It is not available here. `palworld-save-tools` does not treat that size as
+"bytes to consume from this point": `property()` references it exactly once, as
+`size - 4` for arrays, and reads an optional GUID ahead of the payload for
+scalars. Seeking by it would desync the stream, and a desynced parse produces a
+plausible but wrong world that the write path would then save back over the
+real one. A clean failure is strictly better, so the parser is extended rather
+than skipped past.
+
 ## Only occupied slots are stored
 
 This changes the edit model, so it is the easiest thing to get wrong.

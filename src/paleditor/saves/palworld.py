@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..errors import ParserUnavailable, SaveFormatError
-from . import blobs, container
+from . import blobs, container, gvas_compat
 from . import fieldpaths as fp
 from .base import sha256_file
 from .types import ApplyReport, BaseRecord, ChestRecord, SlotEdit, SlotRecord, WorldSnapshot
@@ -38,7 +38,32 @@ def _gvas_module():
         from palworld_save_tools.archive import UUID
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ParserUnavailable(_IMPORT_HINT) from exc
+    # The parser's last release predates this world by two years and does not
+    # know every scalar type that now turns up inside a map.
+    gvas_compat.apply()
     return GvasFile, PALWORLD_TYPE_HINTS, UUID
+
+
+def _drift_hint(exc: Exception) -> str:
+    """Turn a parser exception into something actionable where we can.
+
+    An unknown scalar type inside a map is the most common way this world
+    outgrows the parser, and the fix is one line, so the error says which line.
+    """
+    message = str(exc)
+    if "Unknown property value type" not in message:
+        return ""
+    unknown = message.split(":", 1)[-1].strip().split(" ", 1)[0]
+    known = ", ".join(sorted(gvas_compat.SCALAR_TYPES))
+    return (
+        f"\n\nThis is a property type the parser does not know inside a map. "
+        f"paleditor already\nhandles {known}.\n"
+        f"If {unknown} is a fixed-width scalar or a string, add it to "
+        "SCALAR_TYPES in\nsrc/paleditor/saves/gvas_compat.py and it will read "
+        "and write correctly. Do not\nguess at a type whose layout is unclear: "
+        "the same table is used to write the save\nback.\n"
+        "See docs/save-format.md, 'When the parser meets something new'."
+    )
 
 
 def _raw(node: Any) -> bytes | None:
@@ -105,7 +130,7 @@ class PalworldBackend:
         except Exception as exc:
             raise SaveFormatError(
                 f"could not parse the GVAS structure of {level_sav.name}: "
-                f"{type(exc).__name__}: {exc}"
+                f"{type(exc).__name__}: {exc}{_drift_hint(exc)}"
             ) from exc
         world = gvas.properties.get("worldSaveData", {}).get("value")
         if not isinstance(world, dict):

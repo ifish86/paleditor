@@ -271,3 +271,111 @@ def test_root_is_never_blocked(tmp_path):
         assert _first_untraversable(deep, 0, groups=set()) is None
     finally:
         (tmp_path / "home").chmod(0o755)
+
+
+# -- permission to stop the game -------------------------------------------
+
+
+def write_polkit(tmp_path: Path, body: str) -> Path:
+    rules = tmp_path / "rules.d"
+    rules.mkdir(exist_ok=True)
+    path = rules / "50-paleditor.rules"
+    path.write_text(body)
+    return rules
+
+
+POLKIT_TEMPLATE = """\
+polkit.addRule(function (action, subject) {{
+  if (action.id === "org.freedesktop.systemd1.manage-units" &&
+      subject.user === "{user}") {{
+    var unit = action.lookup("unit");
+    if (unit === "{unit}") {{
+      return polkit.Result.YES;
+    }}
+  }}
+  return polkit.Result.NOT_HANDLED;
+}});
+"""
+
+
+def test_a_rule_naming_the_wrong_user_is_reported(tmp_path, monkeypatch):
+    """The real failure: the rule still named the old service account.
+
+    The window claimed the queue, failed at the stop with 'Interactive
+    authentication required', and requeued the edit.
+    """
+    import paleditor.servicecheck as sc
+
+    rules = write_polkit(
+        tmp_path, POLKIT_TEMPLATE.format(user="paleditor", unit="palworld.service")
+    )
+    monkeypatch.setattr(sc, "POLKIT_RULES_DIRS", (rules,))
+    problem = sc.unit_authority_problem("palworld", "palworld.service")
+    assert problem is not None
+    assert "does not name 'palworld'" in problem
+
+
+def test_the_user_is_matched_as_a_quoted_value(tmp_path, monkeypatch):
+    """"palworld" occurs inside "palworld.service" in every such rule.
+
+    A plain substring test made every misconfigured rule look correct.
+    """
+    import paleditor.servicecheck as sc
+
+    rules = write_polkit(
+        tmp_path, POLKIT_TEMPLATE.format(user="paleditor", unit="palworld.service")
+    )
+    monkeypatch.setattr(sc, "POLKIT_RULES_DIRS", (rules,))
+    assert sc.unit_authority_problem("palworld", "palworld.service") is not None
+    assert sc.unit_authority_problem("paleditor", "palworld.service") is None
+
+
+def test_no_rule_at_all_is_reported(tmp_path, monkeypatch):
+    import paleditor.servicecheck as sc
+
+    rules = tmp_path / "rules.d"
+    rules.mkdir()
+    monkeypatch.setattr(sc, "POLKIT_RULES_DIRS", (rules,))
+    problem = sc.unit_authority_problem("palworld", "palworld.service")
+    assert problem is not None and "no polkit rule" in problem
+
+
+def test_root_needs_no_rule(tmp_path, monkeypatch):
+    import paleditor.servicecheck as sc
+
+    rules = tmp_path / "rules.d"
+    rules.mkdir()
+    monkeypatch.setattr(sc, "POLKIT_RULES_DIRS", (rules,))
+    assert sc.unit_authority_problem("root", "palworld.service") is None
+
+
+def test_an_absent_polkit_directory_is_not_treated_as_a_refusal(tmp_path, monkeypatch):
+    """Authorisation can come from sudoers or group membership instead, so an
+    unreadable polkit is a reason to say nothing, not to claim a problem."""
+    import paleditor.servicecheck as sc
+
+    monkeypatch.setattr(sc, "POLKIT_RULES_DIRS", (tmp_path / "nowhere",))
+    assert sc.unit_authority_problem("palworld", "palworld.service") is None
+
+
+def test_a_rule_in_the_distribution_directory_also_counts(tmp_path, monkeypatch):
+    import paleditor.servicecheck as sc
+
+    shipped = tmp_path / "usr-rules"
+    shipped.mkdir()
+    (shipped / "10-vendor.rules").write_text(
+        POLKIT_TEMPLATE.format(user="palworld", unit="palworld.service")
+    )
+    monkeypatch.setattr(sc, "POLKIT_RULES_DIRS", (tmp_path / "etc-rules", shipped))
+    assert sc.unit_authority_problem("palworld", "palworld.service") is None
+
+
+def test_the_window_preflight_does_not_block_on_this(config):
+    """It is a heuristic, and the window already fails safely without it:
+    the edit is requeued and the server is left alone."""
+    from paleditor.maintenance import preflight
+
+    from .conftest import FakeServerControl
+
+    object.__setattr__(config.palworld, "plz_write_confirmed", True)
+    assert preflight(config, control=FakeServerControl()) is None

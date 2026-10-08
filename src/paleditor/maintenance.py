@@ -325,6 +325,13 @@ def preflight(config: Config, control: ServerControl | None = None) -> str | Non
                 "so paleditor cannot confirm the game server is down. Check "
                 "[palworld] server_unit."
             )
+
+    # Deliberately not checked here: whether this user may stop the game unit.
+    # That can be granted through polkit, sudoers or group membership, and
+    # reading polkit's rules is a heuristic. Blocking a working deployment on a
+    # guess is worse than letting the window try - it fails safely, requeueing
+    # the edit and leaving the server untouched. The same check runs in
+    # check-service, and /api/status carries it as a warning.
     return None
 
 

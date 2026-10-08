@@ -24,6 +24,15 @@ from .config import Config
 DEFAULT_UNIT = Path("/etc/systemd/system/paleditor.service")
 PLACEHOLDER = "/REPLACE-WITH-YOUR-SaveGames-DIRECTORY"
 
+# Both locations polkit reads; a distribution package may ship a rule in the
+# second, which would otherwise look like no rule at all.
+POLKIT_RULES_DIRS = (
+    Path("/etc/polkit-1/rules.d"),
+    Path("/usr/share/polkit-1/rules.d"),
+)
+POLKIT_RULES_DIR = POLKIT_RULES_DIRS[0]
+MANAGE_UNITS = "org.freedesktop.systemd1.manage-units"
+
 
 @dataclass
 class Finding:
@@ -197,8 +206,83 @@ def check(config: Config, unit_path: Path = DEFAULT_UNIT) -> list[Finding]:
     users = directives.get("User", [])
     if users:
         findings.extend(_check_user(users[-1], directives, config))
+        findings.extend(_check_unit_authority(users[-1], config))
 
     return findings
+
+
+def _names_user(text: str, user: str) -> bool:
+    """Whether a polkit rule actually names this user.
+
+    A plain substring test is wrong here: the service user "palworld" occurs
+    inside the unit name "palworld.service" in every such rule, so everything
+    looked authorised. The user is matched as a quoted value instead, which is
+    how polkit rules compare it.
+    """
+    import re
+
+    return re.search(rf"""["']{re.escape(user)}["']""", text) is not None
+
+
+def unit_authority_problem(user: str, unit: str) -> str | None:
+    """One sentence on why this user cannot manage the unit, or None.
+
+    Shared with the maintenance window's pre-flight, so the refusal reads the
+    same whether it comes from check-service or from pressing Run now.
+    """
+    if user == "root":
+        return None  # root needs no polkit rule to manage units
+    directories = [d for d in POLKIT_RULES_DIRS if d.is_dir()]
+    if not directories:
+        return None  # cannot tell; do not guess
+    rules = []
+    for directory in directories:
+        try:
+            rules.extend(sorted(directory.glob("*.rules")))
+        except OSError:
+            continue
+
+    mentions_unit = []
+    for path in rules:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if MANAGE_UNITS not in text or unit not in text:
+            continue
+        if _names_user(text, user):
+            return None
+        mentions_unit.append(path)
+
+    if mentions_unit:
+        return (
+            f"{mentions_unit[0]} grants control of {unit} but does not name "
+            f"{user!r}, the user paleditor runs as, so stopping the game "
+            "server would fail with 'Interactive authentication required'."
+        )
+    return (
+        f"no polkit rule lets {user!r} stop and start {unit}, so the window "
+        "could not bring the game server down. See docs/deployment.md, "
+        "'Permission to stop and start the game'."
+    )
+
+
+def _check_unit_authority(user: str, config: Config) -> list[Finding]:
+    """Whether the service user is allowed to stop and start the game unit.
+
+    This is the authorisation the whole write path turns on, and nothing else
+    checks it. Without it the window stops partway through with
+
+        Failed to stop palworld.service: Interactive authentication required
+
+    having already claimed the queue, which is a confusing place to find out.
+
+    polkit has no offline "could this user do this" query, so the rules are
+    read instead. That makes this a heuristic: it recognises a rule naming
+    both the user and the unit, and says so plainly when it cannot tell.
+    """
+    problem = unit_authority_problem(user, config.palworld.server_unit)
+    return [Finding("error", problem)] if problem else []
 
 
 def _first_untraversable(

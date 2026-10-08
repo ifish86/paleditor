@@ -58,6 +58,10 @@ def status_(
             f"the last ingest failed: {last.get('error') or 'unknown error'}"
         )
 
+    authority = _unit_authority_warning(config)
+    if authority:
+        warnings.append(authority)
+
     if not queries.lock_codes_available(conn):
         warnings.append(
             "no lock codes were found in the save; running in contents-only mode"
@@ -103,6 +107,27 @@ def status_(
         backend_available=backend_available,
         warnings=warnings,
     )
+
+
+def _unit_authority_warning(config: Config) -> str | None:
+    """Whether this process looks able to stop the game server.
+
+    Advisory: authorisation can also come from sudoers or group membership, and
+    reading polkit's rules is a heuristic, so this warns rather than blocks.
+    """
+    import os
+    import pwd
+
+    try:
+        user = pwd.getpwuid(os.geteuid()).pw_name
+    except KeyError:
+        return None
+    try:
+        from ..servicecheck import unit_authority_problem
+
+        return unit_authority_problem(user, config.palworld.server_unit)
+    except Exception:
+        return None
 
 
 def _last_window(config: Config, conn, warnings: list[str]) -> dict | None:

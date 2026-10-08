@@ -95,6 +95,13 @@ run it before every restart.
 The window needs `systemctl start/stop` on one unit, and nothing more. Grant
 exactly that with a polkit rule rather than full sudo:
 
+**`subject.user` must be the user the paleditor unit runs as**, not the name of
+the game unit and not a service account you are no longer using. Getting it
+wrong is not caught at startup: the window claims the queue, fails at the stop
+with `Interactive authentication required`, requeues the edit and leaves the
+server running. `paleditor check-service` reports it, and `/api/status` carries
+it as a warning.
+
 ```javascript
 // /etc/polkit-1/rules.d/50-paleditor.rules
 polkit.addRule(function (action, subject) {
@@ -176,6 +183,13 @@ interface up:
 
 ```ini
 After=tailscaled.service
+```
+
+Reload polkit after editing a rule:
+
+```bash
+systemctl restart polkit
+paleditor check-service -c /etc/paleditor/paleditor.toml
 ```
 
 ### Reaching the web UI

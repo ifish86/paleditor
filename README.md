@@ -140,7 +140,24 @@ python3 -m venv .venv
 .venv/bin/paleditor --version    # should now point at this directory
 ```
 
-### The frontend
+### Reaching the web UI
+
+There is nothing separate to run. The API process serves the built SPA from
+`frontend/dist/spa`, so once the service is up the UI is on the same addresses
+as the API — every entry in `[server] listen`:
+
+```
+listening on 127.0.0.1:8080, 100.64.0.3:8080
+```
+
+Open the VPN address in a browser and sign in with the friend password, or the
+owner password for the queue controls. On the VPS itself, or over an SSH
+tunnel, `127.0.0.1:8080` works the same way.
+
+The mount is decided when the process starts, so **after building the frontend,
+restart the service** — otherwise it keeps serving the API-only placeholder.
+
+### Working on the frontend
 
 ```bash
 cd frontend

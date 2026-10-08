@@ -13,6 +13,11 @@ Description=paleditor (Palworld chest browser)
 Documentation=https://github.com/ifish86/paleditor
 After=network-online.target
 Wants=network-online.target
+# If [server] listen includes a VPN address, order this after whatever brings
+# that interface up, or the bind fails on boot. systemd keeps retrying every
+# RestartSec so it recovers on its own, but it logs a failure each time until
+# the interface appears.
+# After=tailscaled.service
 
 [Service]
 Type=simple

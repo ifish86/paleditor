@@ -165,9 +165,24 @@ addresses in the example config are both served. A public address is still
 refused unless `allow_public` is true.
 
 If a bind fails — a typo'd address, a port already taken, a VPN interface that
-has not come up yet — the service exits with which address it could not bind
-rather than starting half-served. For an address that appears late, order the
-unit after the interface is up.
+has not come up yet — the service exits naming the address it could not bind,
+rather than starting half-served.
+
+On boot that can race: `network-online.target` does not mean a VPN interface
+exists yet. `Restart=on-failure` with `RestartSec=5` means the unit retries
+until the address appears, so it recovers on its own, but logs a failure each
+time in between. To avoid the noise, order the unit after whatever brings the
+interface up:
+
+```ini
+After=tailscaled.service
+```
+
+### Reaching the web UI
+
+The API process serves the built frontend, so there is no second service. The
+UI is on every address in `listen`. The mount is decided at startup, so after
+building or rebuilding the frontend, restart the unit.
 
 ## Using a separate service account
 

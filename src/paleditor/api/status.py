@@ -98,10 +98,24 @@ def status_(
         lock_codes_available=queries.lock_codes_available(conn),
         stale=stale,
         window_in_progress=FileLock(config.maintenance.lock_file).is_locked(),
+        last_window=_last_window(config, conn, warnings),
         save_backend=config.palworld.save_backend,
         backend_available=backend_available,
         warnings=warnings,
     )
+
+
+def _last_window(config: Config, conn, warnings: list[str]) -> dict | None:
+    """What the previous window did, and why the next one would refuse."""
+    from ..maintenance import last_outcome, preflight
+
+    outcome = last_outcome(conn) or {}
+    blocked = preflight(config)
+    if blocked:
+        # Surfaced as a standing warning, not only when somebody presses the
+        # button, because it governs whether queued edits can ever land.
+        warnings.append(f"the maintenance window cannot run: {blocked}")
+    return {**outcome, "blocked": blocked} if (outcome or blocked) else None
 
 
 @router.post("/maintenance/run")
@@ -154,6 +168,14 @@ def run_maintenance(
                 "know this save's layout well enough to write to it"
             ),
         )
+
+    # The window checks these too, but it runs in the background, so a refusal
+    # there would come back as a cheerful "started" and then nothing.
+    from ..maintenance import preflight
+
+    blocked = preflight(config)
+    if blocked is not None:
+        raise HTTPException(status_code=503, detail=blocked)
 
     background.add_task(_run_window_safely, config)
     return {

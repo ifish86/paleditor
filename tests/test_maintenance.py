@@ -487,3 +487,77 @@ def test_a_confirmed_deployment_may_change_the_container(
     report = run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
     assert report.ok, report.error
     assert report.applied == 1
+
+
+# -- saying why it will not run --------------------------------------------
+
+
+def test_preflight_names_the_container_problem(config, save_dir):
+    """The window refuses in the background, so the reason has to be
+    available before anybody presses the button."""
+    import struct
+
+    from paleditor.maintenance import preflight
+    from paleditor.saves import container
+
+    body = (save_dir / "Level.sav").read_bytes()
+    (save_dir / "Level.sav").write_bytes(
+        struct.pack("<II", len(body), len(body))
+        + container.MAGIC_OODLE + bytes([0x31]) + body
+    )
+    blocked = preflight(config, control=FakeServerControl())
+    assert blocked is not None
+    assert "check-write" in blocked
+
+
+def test_preflight_passes_once_the_container_change_is_confirmed(config):
+    from paleditor.maintenance import preflight
+
+    object.__setattr__(config.palworld, "plz_write_confirmed", True)
+    assert preflight(config, control=FakeServerControl()) is None
+
+
+def test_preflight_catches_an_unknown_systemd_unit(config):
+    from paleditor.maintenance import preflight
+
+    object.__setattr__(config.palworld, "plz_write_confirmed", True)
+    blocked = preflight(config, control=FakeServerControl(exists=False))
+    assert blocked is not None and "server_unit" in blocked
+
+
+def test_the_outcome_of_a_window_is_recorded(config, conn, ingested, fake_control):
+    """A window that refuses or fails used to leave nothing behind but a log
+    line on the server."""
+    from paleditor.maintenance import last_outcome
+
+    queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    report = run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+    assert report.ok, report.error
+
+    with __import__("paleditor").db.closing_connect(config.database.path) as fresh:
+        outcome = last_outcome(fresh)
+    assert outcome is not None
+    assert outcome["ok"] is True
+    assert outcome["applied"] == 1
+    assert outcome["finished_at"]
+
+
+def test_a_refusal_is_recorded_too(config, conn, ingested, save_dir, fake_control):
+    import struct
+
+    from paleditor.maintenance import last_outcome
+    from paleditor.saves import container
+
+    queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    body = (save_dir / "Level.sav").read_bytes()
+    (save_dir / "Level.sav").write_bytes(
+        struct.pack("<II", len(body), len(body))
+        + container.MAGIC_OODLE + bytes([0x31]) + body
+    )
+    run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+
+    with __import__("paleditor").db.closing_connect(config.database.path) as fresh:
+        outcome = last_outcome(fresh)
+    assert outcome is not None
+    assert outcome["ok"] is False
+    assert "check-write" in outcome["error"]

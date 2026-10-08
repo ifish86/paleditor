@@ -45,18 +45,48 @@
               edit{{ status.queuedCount === 1 ? '' : 's' }} and restarts it.
             </div>
           </q-card-section>
+          <!--
+            Say why the button will not work before it is pressed. The window
+            runs in the background, so a refusal used to arrive as a cheerful
+            "started" followed by nothing at all.
+          -->
+          <q-card-section v-if="status.windowBlocked" class="q-pt-none">
+            <q-banner dense class="bg-grey-9 text-white">
+              <template #avatar><q-icon name="block" color="warning" /></template>
+              <div class="text-caption">{{ status.windowBlocked }}</div>
+            </q-banner>
+          </q-card-section>
+
           <q-card-actions>
             <q-btn
               color="negative"
               icon="build"
               label="Run now"
               :loading="running"
-              :disable="!session.isOwner || status.windowInProgress"
+              :disable="!session.isOwner || status.windowInProgress || Boolean(status.windowBlocked)"
               @click="confirmRun"
             />
           </q-card-actions>
           <q-card-section v-if="!session.isOwner" class="q-pt-none text-caption text-grey-6">
             Needs the owner password.
+          </q-card-section>
+
+          <!-- What the previous run actually did. -->
+          <q-card-section v-if="lastRun" class="q-pt-none text-caption">
+            <q-separator class="q-mb-sm" />
+            <div class="text-grey-6">
+              Last window {{ relativeTime(lastRun.finished_at) }}:
+              <span :class="lastRun.ok ? 'text-positive' : 'text-negative'">
+                {{ lastRun.ok ? 'completed' : 'failed' }}
+              </span>
+              <template v-if="lastRun.claimed">
+                - {{ lastRun.applied }} applied, {{ lastRun.failed }} failed
+              </template>
+              <template v-if="lastRun.restored"> &middot; backup restored</template>
+            </div>
+            <div v-if="lastRun.error" class="text-negative q-mt-xs">
+              {{ lastRun.error }}
+            </div>
           </q-card-section>
         </q-card>
       </div>
@@ -131,7 +161,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Dialog, Notify } from 'quasar'
 import { api } from 'boot/api'
 import { useSessionStore } from 'stores/session'
@@ -144,6 +174,12 @@ const edits = ref([])
 const loading = ref(false)
 const running = ref(false)
 const statusFilter = ref(null)
+
+// Only show a previous run once one has actually happened; being blocked is
+// not a run.
+const lastRun = computed(() =>
+  status.lastWindow && status.lastWindow.finished_at ? status.lastWindow : null,
+)
 
 const statusOptions = [
   { label: 'Queued', value: 'queued' },

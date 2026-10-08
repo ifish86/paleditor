@@ -79,6 +79,8 @@ class StatusResponse(BaseModel):
     lock_codes_available: bool
     stale: bool
     window_in_progress: bool
+    # What the previous window did, plus why the next one would refuse.
+    last_window: dict | None = None
     save_backend: str
     backend_available: bool
     warnings: list[str] = []

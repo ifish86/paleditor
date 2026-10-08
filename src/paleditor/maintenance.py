@@ -96,9 +96,11 @@ def run_window(
 
     try:
         with db.closing_connect(config.database.path) as conn:
-            return _sequence(
+            result = _sequence(
                 config, conn, report, control, rcon_factory, trigger=trigger
             )
+        record_outcome(config, result)
+        return result
     finally:
         lock.release()
 
@@ -294,6 +296,75 @@ def _warn_and_stop(config, control, report, rcon_factory) -> None:
 
 
 # -- queue -----------------------------------------------------------------
+
+
+LAST_WINDOW_KEY = "last_window"
+
+
+def preflight(config: Config, control: ServerControl | None = None) -> str | None:
+    """Why the window would refuse to run, or None if it would proceed.
+
+    The window itself checks these, but it runs in the background, so a refusal
+    there is invisible to whoever pressed the button. Checking up front lets
+    the request fail with the reason instead of reporting a start that never
+    happens. Both are cheap: a 12-byte header read and a systemctl query.
+    """
+    blocked = _container_change_blocked(config)
+    if blocked is not None:
+        return blocked
+    control = control or SystemdServerControl(config.palworld.server_unit)
+    checker = getattr(control, "unit_exists", None)
+    if checker is not None:
+        try:
+            known = checker()
+        except Exception:
+            known = True  # cannot tell; let the window decide
+        if not known:
+            return (
+                f"systemd does not know the unit {config.palworld.server_unit!r}, "
+                "so paleditor cannot confirm the game server is down. Check "
+                "[palworld] server_unit."
+            )
+    return None
+
+
+def record_outcome(config: Config, report: "WindowReport") -> None:
+    """Keep the last window's result where the UI can see it.
+
+    Without this a window that refuses, or fails halfway, leaves nothing behind
+    but a log line on the server.
+    """
+    import json
+
+    payload = {
+        "batch_id": report.batch_id,
+        "finished_at": db.utcnow(),
+        "ok": report.ok,
+        "claimed": report.claimed,
+        "applied": report.applied,
+        "failed": report.failed,
+        "restored": report.restored,
+        "error": report.error,
+        "steps": report.steps[-12:],
+    }
+    try:
+        with db.closing_connect(config.database.path) as conn:
+            db.set_state(conn, LAST_WINDOW_KEY, json.dumps(payload))
+            conn.commit()
+    except Exception:
+        log.exception("could not record the window outcome")
+
+
+def last_outcome(conn) -> dict | None:
+    import json
+
+    raw = db.get_state(conn, LAST_WINDOW_KEY)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
 
 
 def _container_change_blocked(config: Config) -> str | None:

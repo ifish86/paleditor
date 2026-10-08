@@ -14,6 +14,7 @@ export const useStatusStore = defineStore('status', {
     saveBackend: null,
     backendAvailable: true,
     warnings: [],
+    lastWindow: null,
     loading: false,
   }),
   getters: {
@@ -22,6 +23,10 @@ export const useStatusStore = defineStore('status', {
     // Drives the contents-only mode: with no lock-code field, showing every
     // chest as unlocked would be a lie.
     contentsOnly: (state) => !state.lockCodesAvailable,
+    // Why the window would refuse, if it would. This governs whether queued
+    // edits can ever land, so it is worth showing before anyone presses the
+    // button rather than after.
+    windowBlocked: (state) => (state.lastWindow && state.lastWindow.blocked) || null,
   },
   actions: {
     async load () {
@@ -39,6 +44,7 @@ export const useStatusStore = defineStore('status', {
         this.saveBackend = data.save_backend
         this.backendAvailable = data.backend_available
         this.warnings = data.warnings || []
+        this.lastWindow = data.last_window || null
       } finally {
         this.loading = false
       }

@@ -390,3 +390,35 @@ def test_concurrent_requests_do_not_trip_sqlite_thread_checks(client, friend_cli
 
     bad = [(r.request.url.path, r.status_code, r.text[:160]) for r in results if r.status_code != 200]
     assert not bad, f"concurrent requests failed: {bad}"
+
+
+def test_running_the_window_when_it_would_refuse_says_so(owner_client, config, save_dir):
+    """It used to answer 200 "the window is running", refuse in the
+    background, and leave the caller with a toast and no window."""
+    import struct
+
+    from paleditor.saves import container
+
+    body = (save_dir / "Level.sav").read_bytes()
+    (save_dir / "Level.sav").write_bytes(
+        struct.pack("<II", len(body), len(body))
+        + container.MAGIC_OODLE + bytes([0x31]) + body
+    )
+    response = owner_client.post("/api/maintenance/run", params={"confirm": True})
+    assert response.status_code == 503
+    assert "check-write" in response.json()["detail"]
+
+
+def test_status_carries_why_the_window_cannot_run(friend_client, config, save_dir):
+    import struct
+
+    from paleditor.saves import container
+
+    body = (save_dir / "Level.sav").read_bytes()
+    (save_dir / "Level.sav").write_bytes(
+        struct.pack("<II", len(body), len(body))
+        + container.MAGIC_OODLE + bytes([0x31]) + body
+    )
+    payload = friend_client.get("/api/status").json()
+    assert payload["last_window"]["blocked"]
+    assert any("cannot run" in w for w in payload["warnings"])

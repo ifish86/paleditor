@@ -46,7 +46,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from 'stores/session'
 import { useStatusStore } from 'stores/status'
@@ -62,9 +62,13 @@ const catalog = useCatalogStore()
 const isRoot = computed(() => route.name === 'bases')
 
 onMounted(() => {
-  status.load()
+  // Polls slowly while idle and quickly while a maintenance window is running,
+  // so the server state, queue depth and edit statuses move on their own.
+  status.startPolling()
   catalog.load()
 })
+
+onUnmounted(() => status.stopPolling())
 
 function refresh () {
   status.load()

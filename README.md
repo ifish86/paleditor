@@ -112,6 +112,11 @@ CONF
 The API is then on <http://127.0.0.1:8080>, with docs at `/docs`. Sign in with
 `friendpw`, or `ownerpw` for the owner-gated endpoints.
 
+The web UI refreshes itself: slowly while idle, every few seconds while a
+maintenance window is running, so the server going down, an edit moving to
+`applying` and then to `applied`, and the window's result all appear without a
+manual reload. It pauses while the tab is hidden.
+
 `check-config` prints every path it resolved, including the maintenance lock
 (which defaults to sitting beside the database) and the directory the running
 code was imported from.

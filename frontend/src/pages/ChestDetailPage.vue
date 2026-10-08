@@ -154,6 +154,11 @@ async function load () {
 onMounted(load)
 watch(() => route.params.containerGuid, load)
 
+// A window changes every pending overlay on this grid at once.
+watch(() => status.windowInProgress, (running, wasRunning) => {
+  if (running !== wasRunning) load()
+})
+
 function openEditor (slot) {
   if (slot.has_pending) {
     // A slot with an edit already queued cannot take a second one, so offer to

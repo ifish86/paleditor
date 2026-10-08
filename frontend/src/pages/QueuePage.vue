@@ -161,7 +161,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Dialog, Notify } from 'quasar'
 import { api } from 'boot/api'
 import { useSessionStore } from 'stores/session'
@@ -222,6 +222,12 @@ async function load () {
 }
 
 onMounted(load)
+
+// The status store polls; the edit table does not, so reload it when a window
+// starts or finishes. That is when every row in it changes at once.
+watch(() => status.windowInProgress, (running, wasRunning) => {
+  if (running !== wasRunning) load()
+})
 
 function confirmRun () {
   Dialog.create({

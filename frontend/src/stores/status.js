@@ -16,6 +16,10 @@ export const useStatusStore = defineStore('status', {
     warnings: [],
     lastWindow: null,
     loading: false,
+    // Polling handle and the interval currently in use, so a change of pace
+    // can be applied without stacking timers.
+    _timer: null,
+    _everyMs: null,
   }),
   getters: {
     queuedCount: (state) => state.queue.queued ?? 0,
@@ -29,6 +33,41 @@ export const useStatusStore = defineStore('status', {
     windowBlocked: (state) => (state.lastWindow && state.lastWindow.blocked) || null,
   },
   actions: {
+    // A window takes a minute or two, during which the server goes down, the
+    // edit moves to 'applying' and then to 'applied'. Loading once on mount
+    // meant watching none of that happen.
+    pollIntervalMs () {
+      return this.windowInProgress ? 3000 : 30000
+    },
+
+    startPolling () {
+      if (this._timer) return
+      this._tick()
+    },
+
+    stopPolling () {
+      if (this._timer) {
+        clearTimeout(this._timer)
+        this._timer = null
+        this._everyMs = null
+      }
+    },
+
+    async _tick () {
+      // Nothing to learn while the tab is hidden, and it would keep a phone
+      // awake for no reason.
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        try {
+          await this.load()
+        } catch {
+          // Transient failures are normal during a window: the API is up but
+          // the machine is busy. Keep polling rather than giving up.
+        }
+      }
+      this._everyMs = this.pollIntervalMs()
+      this._timer = setTimeout(() => this._tick(), this._everyMs)
+    },
+
     async load () {
       this.loading = true
       try {

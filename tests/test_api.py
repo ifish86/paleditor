@@ -422,3 +422,29 @@ def test_status_carries_why_the_window_cannot_run(friend_client, config, save_di
     payload = friend_client.get("/api/status").json()
     assert payload["last_window"]["blocked"]
     assert any("cannot run" in w for w in payload["warnings"])
+
+
+def test_status_is_cheap_enough_to_poll(friend_client):
+    """The UI polls this every 3 seconds while a window runs, so it must not
+    do anything expensive - no save parse, no full table scan."""
+    import time
+
+    started = time.monotonic()
+    for _ in range(10):
+        assert friend_client.get("/api/status").status_code == 200
+    elapsed = time.monotonic() - started
+    assert elapsed < 5.0, f"10 status calls took {elapsed:.1f}s"
+
+
+def test_status_reports_a_window_in_progress(friend_client, config):
+    """What the banner and the disabled button are driven by.
+
+    The queue screen used to load this once on mount, so a window that took a
+    minute showed nothing changing until somebody refreshed by hand.
+    """
+    from paleditor.locking import FileLock
+
+    assert friend_client.get("/api/status").json()["window_in_progress"] is False
+    with FileLock(config.maintenance.lock_file):
+        assert friend_client.get("/api/status").json()["window_in_progress"] is True
+    assert friend_client.get("/api/status").json()["window_in_progress"] is False

@@ -251,6 +251,39 @@ def cancel_edit(
         )
 
 
+@router.get("/items/{item_id}/icon")
+def item_icon(
+    item_id: str,
+    config: Config = Depends(get_config),
+    conn: sqlite3.Connection = Depends(get_conn),
+    _=Depends(get_session),
+):
+    """Serve a downloaded icon, or 404 so the UI falls back to its category."""
+    from fastapi.responses import FileResponse
+
+    from .. import db as _db
+
+    row = conn.execute(
+        "SELECT icon FROM items WHERE item_id = ?", (item_id,)
+    ).fetchone()
+    if row is None or not row["icon"]:
+        raise HTTPException(status_code=404, detail="no icon for that item")
+
+    directory = _db.icon_dir(config.database.path).resolve()
+    path = (directory / row["icon"]).resolve()
+    # The stored name is sanitised on the way in; checked again on the way out
+    # because this one serves files off disk.
+    if directory not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="icon file is missing")
+    from ..icons import MEDIA_TYPES
+
+    return FileResponse(
+        path,
+        media_type=MEDIA_TYPES.get(path.suffix.lstrip("."), "application/octet-stream"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.get("/items")
 def list_items(
     q: str | None = Query(default=None, max_length=120),

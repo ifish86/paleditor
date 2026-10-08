@@ -147,6 +147,16 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="unit file (default: /etc/systemd/system/paleditor.service)")
     p.set_defaults(handler=_check_service)
 
+    p = with_config(sub.add_parser(
+        "fetch-icons",
+        help="download item icons from the wiki (partial; see docs/icons.md)",
+    ))
+    p.add_argument("--all", action="store_true",
+                   help="every catalogued item, not only those in the world")
+    p.add_argument("--refresh", action="store_true",
+                   help="re-download icons already present")
+    p.set_defaults(handler=_fetch_icons)
+
     p = with_config(sub.add_parser("init-db", help="create the database schema"))
     p.set_defaults(handler=_init_db)
 
@@ -533,6 +543,45 @@ def _check_service(args) -> int:
             "or from writing the save."
         )
         return 1
+    return 0
+
+
+def _fetch_icons(args) -> int:
+    from . import db, icons
+
+    config = _load(args, check_paths=False)
+    destination = db.icon_dir(config.database.path)
+    print(f"downloading into {destination}")
+    with db.closing_connect(config.database.path) as conn:
+        report = icons.fetch(
+            conn, destination,
+            only_in_world=not args.all, refresh=args.refresh,
+        )
+
+    attempted = report.downloaded + len(report.unresolved) + len(report.errors)
+    print(f"  downloaded : {report.downloaded}")
+    print(f"  already had: {report.skipped}")
+    print(f"  no match   : {len(report.unresolved)}")
+    if report.errors:
+        print(f"  failed     : {len(report.errors)}")
+        for item_id, reason in list(report.errors.items())[:5]:
+            print(f"      {item_id}: {reason}")
+    if attempted:
+        print(f"\n{report.downloaded}/{attempted} resolved.")
+    if report.unresolved:
+        print(
+            "\nThe wiki keys images on display names, so an item can only be "
+            "found once it\nhas one. These are still raw ids:\n"
+        )
+        for item_id in report.unresolved[:12]:
+            print(f"    {item_id}")
+        if len(report.unresolved) > 12:
+            print(f"    ... and {len(report.unresolved) - 12} more")
+        print(
+            "\nName them in src/paleditor/data/items.json and run this again. "
+            "Until then\nthey render as their category colour, which every "
+            "item has."
+        )
     return 0
 
 

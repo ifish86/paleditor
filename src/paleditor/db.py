@@ -56,7 +56,18 @@ _ADDED_COLUMNS = (
     ("chests", "kind", "TEXT NOT NULL DEFAULT 'storage'"),
     ("chests", "lockable", "INTEGER NOT NULL DEFAULT 0"),
     ("chests", "has_container", "INTEGER NOT NULL DEFAULT 1"),
+    ("items", "icon", "TEXT"),
 )
+
+
+def icon_dir(database_path: Path) -> Path:
+    """Where downloaded item icons live: beside the database.
+
+    The same reasoning as the maintenance lock. It is a directory the
+    deployment already has to be able to write, so it needs no extra setting
+    and cannot point somewhere the service cannot reach.
+    """
+    return Path(database_path).parent / "icons"
 
 
 def init(path: str | Path) -> None:

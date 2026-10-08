@@ -180,6 +180,7 @@ declared as an ES module. Everything under `src/` is ESM, which Vite handles.
 | `paleditor hash-password` | Generate an argon2id hash for the config |
 | `paleditor check-config` | Validate a config file and show the next window |
 | `paleditor check-service` | Check the installed systemd unit against that config |
+| `paleditor fetch-icons` | Download item icons from the wiki (partial; see [docs/icons.md](docs/icons.md)) |
 | `paleditor verify-save` | Check the format assumptions against a real save |
 | `paleditor dump-chest` | Print one chest's slots, to read item ids back |
 | `paleditor check-write` | Rewrite a save unchanged, to test the PlZ container swap |

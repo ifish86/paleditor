@@ -25,6 +25,11 @@ config/*.toml
 .env.*
 !.env.example
 
+# --- Downloaded item icons ------------------------------------------------
+# Fetched onto the operator's machine by 'paleditor fetch-icons'. The artwork
+# belongs to the game's publisher and is not ours to redistribute.
+icons/
+
 # --- Database -------------------------------------------------------------
 # Rebuilt by ingest, except for the app-owned tables, which are backed up
 # separately rather than committed.

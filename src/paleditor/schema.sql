@@ -86,7 +86,12 @@ CREATE TABLE IF NOT EXISTS items (
     -- 'seed'     : shipped with the app
     -- 'confirmed': read back from a live container dump
     -- 'observed' : seen in a save but not yet named by hand
-    provenance   TEXT NOT NULL DEFAULT 'seed'
+    provenance   TEXT NOT NULL DEFAULT 'seed',
+    -- Filename of a downloaded icon, relative to the icon directory, or NULL.
+    -- Icons are fetched by 'paleditor fetch-icons' and never committed: they
+    -- are the game publisher's artwork. An item without one falls back to its
+    -- category colour, which every item has.
+    icon         TEXT
 );
 
 -- App-owned. Survives every reparse; this is what makes nicknames stable.

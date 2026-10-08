@@ -20,11 +20,24 @@ module.exports = configure(function () {
 
     devServer: {
       open: false,
-      port: 9000,
+      port: Number(process.env.PALEDITOR_DEV_PORT) || 9000,
+      // Loopback only. Vite binds every interface by default, which on a
+      // public VPS puts the dev server - and through the proxy below, the
+      // whole API including the owner-only endpoints - on the public internet.
+      // That would quietly undo the config loader's refusal to bind a public
+      // address without allow_public.
+      //
+      // This is also what editor port forwarding wants: it forwards the remote
+      // machine's localhost. To expose it deliberately, set PALEDITOR_DEV_HOST
+      // to an address you mean, such as a VPN one.
+      host: process.env.PALEDITOR_DEV_HOST || '127.0.0.1',
       proxy: {
         // In development the API runs separately; in production it is the same
         // origin, so no proxy is needed there.
-        '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+        '/api': {
+          target: process.env.PALEDITOR_API || 'http://127.0.0.1:8080',
+          changeOrigin: true,
+        },
       },
     },
 

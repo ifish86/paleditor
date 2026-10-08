@@ -4,11 +4,28 @@
       v-for="slot in slots"
       :key="slot.slot_index"
       class="slot-cell"
-      :class="{ 'is-empty': !slot.item_id && !slot.has_pending, 'has-pending': slot.has_pending }"
+      :class="[
+        categoryClass(slot),
+        { 'is-empty': !slot.item_id && !slot.has_pending, 'has-pending': slot.has_pending },
+      ]"
       role="button"
       :aria-label="`Slot ${slot.slot_index}`"
       @click="$emit('select', slot)"
     >
+      <!--
+        An icon when one was found, otherwise the category stripe carries the
+        meaning. Most items have no icon: the wiki keys images on display
+        names and the save keys items on internal ids.
+      -->
+      <img
+        v-if="slot.item_id && !iconFailed[slot.item_id]"
+        class="slot-icon"
+        :src="`/api/items/${encodeURIComponent(slot.item_id)}/icon`"
+        :alt="slot.display_name"
+        loading="lazy"
+        @error="iconFailed[slot.item_id] = true"
+      />
+
       <div class="slot-item-name">
         <!--
           A queued edit renders over the slot it affects, so the pending state
@@ -48,10 +65,20 @@
 </template>
 
 <script setup>
+import { reactive } from 'vue'
+
 defineProps({
   slots: { type: Array, required: true },
 })
 defineEmits(['select'])
+
+// Most items have no icon, so a 404 is the normal case rather than an error.
+// Remembering the misses stops the browser re-requesting them on every render.
+const iconFailed = reactive({})
+
+function categoryClass (slot) {
+  return slot.category ? `cat-${slot.category}` : ''
+}
 
 function pendingLabel (slot) {
   if (!slot.pending_item_id) return 'will be emptied'

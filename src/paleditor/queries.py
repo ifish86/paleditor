@@ -156,7 +156,7 @@ def slots(
     rows = conn.execute(
         """
         SELECT s.slot_index, s.item_id, s.stack_count,
-               i.display_name, i.category, i.max_stack,
+               i.display_name, i.category, i.max_stack, i.icon,
                p.id          AS pending_edit_id,
                p.item_id     AS pending_item_id,
                p.stack_count AS pending_stack_count,
@@ -178,6 +178,9 @@ def slots(
         # An unknown item_id renders as its raw string rather than being hidden.
         item["display_name"] = item["display_name"] or item["item_id"]
         item["has_pending"] = item["pending_edit_id"] is not None
+        # Every occupied slot gets a category so the grid is readable even
+        # where no icon was found, which is most of them.
+        item["category"] = item["category"] or _category(item["item_id"])
         out.append(item)
 
     stored = {item["slot_index"] for item in out}
@@ -201,6 +204,7 @@ def slots(
                 "display_name": None,
                 "category": None,
                 "max_stack": None,
+                "icon": None,
                 "pending_edit_id": edit["id"] if edit else None,
                 "pending_item_id": edit["item_id"] if edit else None,
                 "pending_stack_count": edit["stack_count"] if edit else None,
@@ -341,6 +345,14 @@ def lock_codes_available(conn: sqlite3.Connection) -> bool:
         "SELECT COUNT(*) AS n FROM chests WHERE lock_code IS NOT NULL"
     ).fetchone()
     return bool(row and row["n"])
+
+
+def _category(item_id: str | None) -> str | None:
+    if not item_id:
+        return None
+    from .catalog import categorise
+
+    return categorise(item_id)
 
 
 def _decorate_chest(item: dict, rev: int | None) -> dict:

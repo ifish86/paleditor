@@ -26,15 +26,24 @@ paleditor reads both containers. Oodle decompression goes through a `libooz.so`
 build loaded by ctypes ([`saves/oodle.py`](../src/paleditor/saves/oodle.py));
 the library is not vendored, because which build works depends on the host.
 
-### Writing is still unproven
+### Writing PlZ over a PlM world
 
-paleditor writes `PlZ`. `libooz.so` exports `OodLZ_Compress`, but it segfaults
-when called, so there is no working Oodle compressor to write `PlM` with.
+paleditor writes `PlZ`. There is no working Oodle compressor available to write
+`PlM` with: the open reimplementation is decompression-only, and the
+`OodLZ_Compress` exported by some forks segfaults when called.
 
-**Whether Palworld loads a PlZ save in place of a PlM one is the one thing
-paleditor cannot determine on its own, and the entire write path rests on it.**
-The maintenance window refuses to run on an Oodle world until
-`[palworld] plz_write_confirmed = true`. To earn that:
+**Palworld loads a `PlZ` save in place of a `PlM` one.** Confirmed on a live
+server in October 2026: a world rewritten with no edits, only the container
+changed, started and played normally.
+
+That is less of a leap than it sounds. The rewritten file only has to survive
+being *loaded* once — the game holds the world in memory and writes its own
+saves in its own format, so within a save cycle the file on disk is `PlM`
+again. Nothing is being converted.
+
+It stays gated per deployment by `[palworld] plz_write_confirmed`, because a
+future game version could stop accepting it and the cost of being wrong is a
+world that will not load. To earn it:
 
 ```bash
 paleditor check-write -c /etc/paleditor/paleditor.toml
@@ -42,7 +51,8 @@ paleditor check-write -c /etc/paleditor/paleditor.toml
 
 That rewrites the save with no edits at all, so the only difference is the
 container, and verifies the GVAS payload survives byte for byte. Then load the
-result on a **copy** of the world and see whether the game accepts it.
+result and see whether the game accepts it — on a copy of the world, or at a
+time you are happy to restore from the backup it just made.
 
 ## Parsing: structure from the library, blobs by hand
 

@@ -232,5 +232,9 @@ def test_the_status_report_no_longer_claims_anything_is_guessed():
     report = fp.status_report()
     assert report["lock code"].startswith("CONFIRMED")
     assert report["container GUID"].startswith("CONFIRMED")
-    # The one thing still unproven: whether the game loads a PlZ save.
-    assert "UNVERIFIED" in report["writing PlZ over a PlM world"]
+    # Confirmed on a live server, but still gated per deployment: a future
+    # game version could stop accepting it, and a world that will not load is
+    # an expensive way to find out.
+    container_swap = report["writing PlZ over a PlM world"]
+    assert container_swap.startswith("CONFIRMED")
+    assert "plz_write_confirmed" in container_swap

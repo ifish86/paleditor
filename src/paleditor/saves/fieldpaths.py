@@ -90,5 +90,7 @@ def status_report() -> dict[str, str]:
         "slot layout": "CONFIRMED (i32 index, i32 count, fstring id, tail)",
         "empty slots are not stored": "CONFIRMED",
         "base camp coordinates": "CONFIRMED",
-        "writing PlZ over a PlM world": "UNVERIFIED - run 'paleditor check-write'",
+        "writing PlZ over a PlM world":
+            "CONFIRMED on one server; still gated per deployment by "
+            "[palworld] plz_write_confirmed",
     }

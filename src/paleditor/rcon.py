@@ -3,6 +3,16 @@
 Palworld speaks the Source RCON protocol. Only three commands matter here:
 Save, Shutdown and Info, so this is a short implementation rather than a
 dependency.
+
+One deviation, confirmed against a live server (v1.0.5): Palworld echoes the
+request id on the authentication reply, but answers every *command* with id 0
+regardless of what was sent.
+
+    sent AUTH with id 1   ->  id=1 type=AUTH_RESPONSE
+    sent EXEC 'Info' id 2 ->  id=0 type=RESPONSE_VALUE  'Welcome to Pal Server...'
+
+Exactly one packet comes back per command, so ids are not needed to match
+replies to requests, and insisting on them broke every command.
 """
 
 from __future__ import annotations

@@ -311,6 +311,20 @@ Those are read-only already; this makes them absent from the service's view.
 Add them to the unit and re-run `paleditor check-service` to confirm nothing it
 needs got caught.
 
+## RCON
+
+The window uses RCON to save the world and give players a shutdown countdown
+before stopping the server. It needs `RCONEnabled=True` in
+`PalWorldSettings.ini`, and the secret in `/etc/paleditor/rcon.secret` must be
+the server's **`AdminPassword`** — Palworld has no separate RCON password.
+
+Without it the window still runs: it stops the unit directly instead, so
+anyone online is disconnected without warning.
+
+Palworld answers commands with RCON request id 0 rather than echoing the id it
+was sent, which is a deviation from the Source protocol. paleditor treats ids
+as advisory for that reason; a wrong password is still rejected.
+
 ## Operating notes
 
 - **A game update that moves the save layout** shows as a failed ingest. The

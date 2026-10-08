@@ -37,7 +37,7 @@ The maintenance window refuses to run on an Oodle world until
 `[palworld] plz_write_confirmed = true`. To earn that:
 
 ```bash
-paleditor check-write --save-dir <dir> --out /tmp/Level.plz.sav
+paleditor check-write -c /etc/paleditor/paleditor.toml
 ```
 
 That rewrites the save with no edits at all, so the only difference is the

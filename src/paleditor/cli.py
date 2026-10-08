@@ -105,33 +105,37 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="do not check that save_dir and backup_dir exist")
     p.set_defaults(handler=_check_config)
 
-    p = sub.add_parser(
+    p = with_config(sub.add_parser(
         "verify-save",
-        help="Phase 1: check the save-format assumptions against a real save",
-    )
-    p.add_argument("--save-dir", type=Path, required=True)
+        help="check the save-format assumptions against a real save",
+    ))
+    p.add_argument("--save-dir", type=Path, default=None,
+                   help="defaults to [palworld] save_dir from the config")
     p.add_argument("--backend", default="palworld", choices=["palworld", "fixture"])
     p.add_argument("--oodle-library", type=Path, default=None)
     p.set_defaults(handler=_verify_save)
 
-    p = sub.add_parser(
+    p = with_config(sub.add_parser(
         "dump-chest",
-        help="Phase 1: print one chest's raw slots, to read item ids back",
-    )
-    p.add_argument("--save-dir", type=Path, required=True)
+        help="print one chest's raw slots, to read item ids back",
+    ))
+    p.add_argument("--save-dir", type=Path, default=None,
+                   help="defaults to [palworld] save_dir from the config")
     p.add_argument("--backend", default="palworld", choices=["palworld", "fixture"])
     p.add_argument("--oodle-library", type=Path, default=None)
     p.add_argument("container_guid", nargs="?",
                    help="omit to list every chest found")
     p.set_defaults(handler=_dump_chest)
 
-    p = sub.add_parser(
+    p = with_config(sub.add_parser(
         "check-write",
         help="produce a rewritten save, to test the container swap on a COPY",
-    )
-    p.add_argument("--save-dir", type=Path, required=True)
-    p.add_argument("--out", type=Path, required=True,
-                   help="where to write the rewritten Level.sav")
+    ))
+    p.add_argument("--save-dir", type=Path, default=None,
+                   help="defaults to [palworld] save_dir from the config")
+    p.add_argument("--out", type=Path, default=None,
+                   help="where to write the rewritten Level.sav "
+                        "(default: alongside the backup directory)")
     p.add_argument("--oodle-library", type=Path, default=None)
     p.set_defaults(handler=_check_write)
 
@@ -150,6 +154,31 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 # -- handlers --------------------------------------------------------------
+
+
+def _save_inputs(args):
+    """Resolve save_dir and the Oodle library from flags, else the config.
+
+    These commands are run during deployment, when the config already says
+    where the save and the library are. Repeating them on the command line is
+    how they get typed wrong.
+    """
+    save_dir = getattr(args, "save_dir", None)
+    oodle = getattr(args, "oodle_library", None)
+    config = None
+    if save_dir is None or oodle is None:
+        try:
+            config = _load(args)
+        except Exception as exc:
+            if save_dir is None:
+                raise SystemExit(
+                    f"error: --save-dir was not given and the config could not "
+                    f"be read: {exc}"
+                ) from None
+        if config is not None:
+            save_dir = save_dir or config.palworld.save_dir
+            oodle = oodle or config.palworld.oodle_library
+    return save_dir, oodle, config
 
 
 def _config_path(args) -> Path:
@@ -304,8 +333,9 @@ def _verify_save(args) -> int:
     from .saves.fieldpaths import status_report
     from .savesource import pick
 
+    save_dir, oodle, _ = _save_inputs(args)
     backend = (
-        get_backend("palworld", oodle_library=getattr(args, "oodle_library", None))
+        get_backend("palworld", oodle_library=oodle)
         if args.backend == "palworld" else get_backend(args.backend)
     )
     if not backend.available():
@@ -316,7 +346,7 @@ def _verify_save(args) -> int:
         )
         return 1
 
-    source = pick(args.save_dir, prefer_backup=True)
+    source = pick(save_dir, prefer_backup=True)
     level = source.level_sav
     print(f"parsing {level} ({source.label}) with the {backend.name} backend…")
     snapshot = backend.read_snapshot(level)
@@ -367,14 +397,15 @@ def _dump_chest(args) -> int:
     from .saves import get_backend
     from .savesource import pick
 
+    save_dir, oodle, _ = _save_inputs(args)
     backend = (
-        get_backend("palworld", oodle_library=getattr(args, "oodle_library", None))
+        get_backend("palworld", oodle_library=oodle)
         if args.backend == "palworld" else get_backend(args.backend)
     )
     if not backend.available():
         print(f"the {args.backend} backend is not installed", file=sys.stderr)
         return 1
-    snapshot = backend.read_snapshot(pick(args.save_dir, prefer_backup=True).level_sav)
+    snapshot = backend.read_snapshot(pick(save_dir, prefer_backup=True).level_sav)
 
     if not args.container_guid:
         for chest in snapshot.chests:
@@ -428,26 +459,35 @@ def _check_write(args) -> int:
     from .saves import container, get_backend
     from .savesource import pick
 
-    source = pick(args.save_dir, prefer_backup=True)
+    save_dir, oodle, config = _save_inputs(args)
+    out_path = args.out
+    if out_path is None:
+        # Beside the backups by default: a directory the service can already
+        # write, and not inside the save directory the game server owns.
+        base = config.maintenance.backup_dir if config else Path(".")
+        out_path = base / "check-write-Level.sav"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    source = pick(save_dir, prefer_backup=True)
     print(f"reading {source.level_sav} ({source.label})")
     raw = source.level_sav.read_bytes()
-    box = container.read(raw, path=source.level_sav, oodle_library=args.oodle_library)
+    box = container.read(raw, path=source.level_sav, oodle_library=oodle)
     print(f"  container {box.magic.decode()} type 0x{box.save_type:02x}, "
           f"{len(box.gvas):,} bytes of GVAS")
 
-    backend = get_backend("palworld", oodle_library=args.oodle_library)
+    backend = get_backend("palworld", oodle_library=oodle)
     if not backend.available():
         print("the palworld backend is unavailable", file=sys.stderr)
         return 1
 
     # No edits: the output differs from the input only by its container, which
     # isolates the question being asked.
-    report = backend.apply_edits(source.level_sav, args.out, [])
+    report = backend.apply_edits(source.level_sav, out_path, [])
     assert not report.failed
-    written = args.out.stat().st_size
-    print(f"  wrote {args.out} ({written:,} bytes, was {len(raw):,})")
+    written = out_path.stat().st_size
+    print(f"  wrote {out_path} ({written:,} bytes, was {len(raw):,})")
 
-    rewritten = container.read(args.out.read_bytes(), path=args.out)
+    rewritten = container.read(out_path.read_bytes(), path=out_path)
     identical = rewritten.gvas == box.gvas
     print(f"  re-read as {rewritten.magic.decode()}; "
           f"GVAS identical to the original: {identical}")
@@ -462,7 +502,7 @@ def _check_write(args) -> int:
         "\nThe payload survived the round-trip byte for byte, so only the\n"
         "container changed. Now the part paleditor cannot test:\n"
         f"\n  1. Stop the server and back up {source.level_sav.name}\n"
-        f"  2. Copy {args.out} over it\n"
+        f"  2. Copy {out_path} over it\n"
         "  3. Start the server and confirm the world loads with everything intact\n"
         "  4. Restore your backup afterwards\n"
         "\nDo this on a copy of the world, or at a time you are happy to restore.\n"

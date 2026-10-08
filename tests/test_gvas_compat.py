@@ -122,3 +122,116 @@ def test_an_unrelated_parser_error_gets_no_spurious_hint():
     from paleditor.saves.palworld import _drift_hint
 
     assert _drift_hint(Exception("EOF not reached")) == ""
+
+
+# -- the exact structure from the live world -------------------------------
+
+
+def _fstring(text: str) -> bytes:
+    encoded = text.encode("utf-8") + b"\x00"
+    return struct.pack("<i", len(encoded)) + encoded
+
+
+def player_last_used_times(timestamp: int = 638_000_000_000_000_000) -> bytes:
+    """A GUID-keyed map of 64-bit timestamps, as the live world stores it.
+
+    This is worldSaveData.LevelObjectRecoverPartySaveData.PlayerLastUsedTimes,
+    the property that stopped the whole world parsing.
+    """
+    import uuid
+
+    guid = uuid.UUID("11112222-3333-4444-5555-666677778888").bytes
+
+    header = (
+        _fstring("StructProperty")              # key type
+        + _fstring("Int64Property")             # value type
+        + b"\x00"                               # optional guid: absent
+    )
+    # The declared size covers the map payload only: it starts after the key
+    # and value type names and the optional guid. Getting this wrong is how
+    # "skip the properties you do not understand by their size" quietly
+    # desyncs the stream, which is why paleditor extends the parser instead.
+    payload = (
+        struct.pack("<I", 0)                    # padding
+        + struct.pack("<I", 1)                  # entry count
+        + guid                                  # key: Guid struct
+        + struct.pack("<q", timestamp)          # value: Int64
+    )
+    return (
+        _fstring("PlayerLastUsedTimes")
+        + _fstring("MapProperty")
+        + struct.pack("<Q", len(payload))
+        + header
+        + payload
+        + _fstring("None")                      # ends the property list
+    )
+
+
+PATH = ".worldSaveData.LevelObjectRecoverPartySaveData.Value"
+
+
+def test_the_property_that_stopped_the_world_now_parses():
+    from palworld_save_tools.archive import FArchiveReader
+
+    props = FArchiveReader(player_last_used_times(), {}, {}).properties_until_end(PATH)
+    entry = props["PlayerLastUsedTimes"]["value"][0]
+    assert props["PlayerLastUsedTimes"]["value_type"] == "Int64Property"
+    assert entry["value"] == 638_000_000_000_000_000
+
+
+def test_it_writes_back_byte_for_byte():
+    """The write path replaces Level.sav, so a structure that reads but does
+    not write identically would corrupt the world."""
+    from palworld_save_tools.archive import FArchiveReader, FArchiveWriter
+
+    raw = player_last_used_times()
+    props = FArchiveReader(raw, {}, {}).properties_until_end(PATH)
+
+    out = FArchiveWriter()
+    out.properties(props)
+    assert out.bytes() == raw
+
+
+def test_without_the_patch_it_raises_the_error_seen_in_production(monkeypatch):
+    """Guards the guard: if upstream ever handles this itself, or the patch
+    stops being applied, this test should start failing."""
+    from palworld_save_tools.archive import FArchiveReader
+
+    original = gvas_compat.SCALAR_TYPES.copy()
+    monkeypatch.setattr(gvas_compat, "_patched", False)
+    try:
+        # Rebuild an unpatched reader by restoring the original method.
+        import palworld_save_tools.archive as archive
+
+        patched_method = archive.FArchiveReader.prop_value
+        monkeypatch.setattr(
+            archive.FArchiveReader,
+            "prop_value",
+            patched_method.__wrapped__
+            if hasattr(patched_method, "__wrapped__")
+            else _unpatched_prop_value(),
+        )
+        with pytest.raises(Exception, match="Unknown property value type: Int64Property"):
+            FArchiveReader(player_last_used_times(), {}, {}).properties_until_end(PATH)
+    finally:
+        gvas_compat.SCALAR_TYPES.clear()
+        gvas_compat.SCALAR_TYPES.update(original)
+        gvas_compat._patched = False
+        gvas_compat.apply()
+
+
+def _unpatched_prop_value():
+    """Upstream's five-type prop_value, as it was before the patch."""
+
+    def prop_value(self, type_name: str, struct_type_name: str, path: str):
+        if type_name == "StructProperty":
+            return self.struct_value(struct_type_name, path)
+        if type_name in ("EnumProperty", "NameProperty"):
+            return self.fstring()
+        if type_name == "IntProperty":
+            return self.i32()
+        if type_name == "BoolProperty":
+            return self.bool()
+        raise Exception(f"Unknown property value type: {type_name} ({path})")
+
+    return prop_value

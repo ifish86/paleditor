@@ -112,10 +112,12 @@ misread. A type you are unsure of should keep raising.
 
 Every GVAS property carries a declared size, and skipping what you do not
 understand is the right instinct — it is what makes palstats' reader robust.
-It is not available here. `palworld-save-tools` does not treat that size as
-"bytes to consume from this point": `property()` references it exactly once, as
-`size - 4` for arrays, and reads an optional GUID ahead of the payload for
-scalars. Seeking by it would desync the stream, and a desynced parse produces a
+It is not available here. The size does not mean "bytes from this point", and
+what it excludes varies by type. A `MapProperty` holding one GUID-to-`Int64`
+entry declares 32, not the 70 bytes its body occupies: the key and value type
+names and the optional GUID sit outside the count. `property()` likewise
+references the size exactly once, as `size - 4` for arrays, and reads an
+optional GUID ahead of scalar payloads. Seeking by it would desync the stream, and a desynced parse produces a
 plausible but wrong world that the write path would then save back over the
 real one. A clean failure is strictly better, so the parser is extended rather
 than skipped past.

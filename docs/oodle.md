@@ -60,16 +60,22 @@ its decoder.
 
 ## Verification status
 
-The verification step — select the newest completed snapshot, decompress it,
-confirm the payload is `GVAS` — has been run against the real world and
-correctly handled a 31,466,305-byte save.
+Confirmed end to end on Debian 13 / x86-64 with GCC 14: fetch, compile, verify
+and install, against a live 45,514,762-byte world.
 
-The **compile** step has not been executed end to end here: the sandbox this
-was written in blocks compiling fetched source. The pieces were taken as far as
-they could be, and the script refuses to install anything that does not produce
-an `ooz_decompress` symbol and pass the decompression check, so a bad build
-fails rather than being quietly installed. If it fails on your machine, the
-compiler error is the interesting part; send it over.
+```
+==> fetching https://github.com/powzix/ooz.git at 0503806...
+==> compiling
+==> verifying
+    loaded and ooz_decompress is callable
+    decompressed Level.sav: 45,514,762 bytes of GVAS
+==> installing
+    /opt/paleditor/lib/libooz.so
+```
+
+The script will not install a build that fails to export `ooz_decompress` or
+fails the decompression check, so a broken compile stops rather than producing
+a library that fails mysteriously later.
 
 ## If you already have a build
 

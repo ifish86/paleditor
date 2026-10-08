@@ -350,3 +350,77 @@ def test_refuses_an_rcon_secret_this_process_cannot_read(
             from_dict(raw)
     finally:
         secret.chmod(0o600)
+
+
+# -- paths this process cannot reach ---------------------------------------
+
+
+def test_an_unreachable_save_reports_the_blocker_instead_of_crashing(
+    friend_hash, owner_hash, tmp_path
+):
+    """pathlib raises PermissionError rather than returning False when an
+    ancestor is not searchable.
+
+    The game user's home is 0700 on a stock setup, so running paleditor as
+    anyone else produced a PermissionError traceback out of pathlib instead of
+    a sentence saying which directory was in the way.
+    """
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root can search anything")
+
+    home = tmp_path / "palworld"
+    save = home / "server" / "SaveGames" / "0" / "WORLD"
+    save.mkdir(parents=True)
+    (save / "Level.sav").write_text("{}")
+    home.chmod(0o000)
+    try:
+        raw = base_raw(friend_hash, owner_hash, save, tmp_path,
+                       palworld={"save_dir": str(save)})
+        with pytest.raises(ConfigError) as caught:
+            from_dict(raw)
+        message = str(caught.value)
+        assert "cannot search" in message
+        assert str(home) in message, "the message must name the blocking directory"
+        assert "chmod g+x" in message
+    finally:
+        home.chmod(0o755)
+
+
+def test_a_genuinely_missing_save_still_reads_as_missing(
+    friend_hash, owner_hash, tmp_path
+):
+    """Not every failure is a permission problem; absent must stay absent."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    raw = base_raw(friend_hash, owner_hash, empty, tmp_path,
+                   palworld={"save_dir": str(empty)})
+    with pytest.raises(ConfigError, match="does not contain a Level.sav"):
+        from_dict(raw)
+
+
+def test_the_blocking_ancestor_is_the_highest_one(tmp_path):
+    import os
+
+    from paleditor.config import _blocking_ancestor
+
+    if os.geteuid() == 0:
+        pytest.skip("root can search anything")
+
+    outer = tmp_path / "outer"
+    inner = outer / "inner" / "deep"
+    inner.mkdir(parents=True)
+    outer.chmod(0o000)
+    try:
+        assert _blocking_ancestor(inner / "file") == outer
+    finally:
+        outer.chmod(0o755)
+
+
+def test_nothing_blocks_a_reachable_path(tmp_path):
+    from paleditor.config import _blocking_ancestor
+
+    reachable = tmp_path / "a" / "b"
+    reachable.mkdir(parents=True)
+    assert _blocking_ancestor(reachable / "file") is None

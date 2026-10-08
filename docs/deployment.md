@@ -173,8 +173,12 @@ Then set `User=` and `Group=` in the unit accordingly and re-run
 
 ## First ingest
 
+Run it as the same user the service runs as. Running it as anyone else fails on
+the save directory, because the game user's home is 0700 and nothing else can
+search into it.
+
 ```bash
-sudo -u paleditor /opt/paleditor/.venv/bin/paleditor \
+sudo -u palworld /opt/paleditor/.venv/bin/paleditor \
   -c /etc/paleditor/paleditor.toml ingest
 ```
 
@@ -214,7 +218,7 @@ systemctl start palworld
 Then reingest so the database matches what the world now holds:
 
 ```bash
-sudo -u paleditor /opt/paleditor/.venv/bin/paleditor \
+sudo -u palworld /opt/paleditor/.venv/bin/paleditor \
   -c /etc/paleditor/paleditor.toml ingest
 ```
 

@@ -156,6 +156,54 @@ class Config:
     source_path: Path | None = None
 
 
+def _blocking_ancestor(path: Path) -> Path | None:
+    """The highest directory on the way to ``path`` this process cannot search.
+
+    Reaching a file needs the execute bit on every directory above it. A game
+    user's home at 0700 stops everyone else at the front door, and the
+    permissions below it never come into play.
+    """
+    resolved = Path(os.path.abspath(path))
+    for ancestor in reversed(resolved.parents):
+        if not os.access(ancestor, os.X_OK):
+            return ancestor
+    return None
+
+
+def _access_error(path: Path, label: str) -> ConfigError:
+    """A sentence, rather than a PermissionError traceback out of pathlib."""
+    blocker = _blocking_ancestor(path)
+    if blocker is not None:
+        return ConfigError(
+            f"{label} {path} cannot be reached: this process cannot search "
+            f"{blocker}. The save normally lives in the game user's home, "
+            "which is 0700 on a stock setup, so run paleditor as that user "
+            f"(see docs/deployment.md) or grant the group the execute bit "
+            f"(chmod g+x {blocker})."
+        )
+    return ConfigError(
+        f"{label} {path} exists but this process is not allowed to read it"
+    )
+
+
+def _probe(path: Path, label: str, kind: str) -> bool:
+    """is_file()/is_dir()/exists() without the PermissionError.
+
+    pathlib raises rather than returning False when an ancestor is not
+    searchable, which turned a misconfigured user into a traceback.
+    """
+    try:
+        if kind == "file":
+            return path.is_file()
+        if kind == "dir":
+            return path.is_dir()
+        return path.exists()
+    except PermissionError as exc:
+        raise _access_error(path, label) from exc
+    except OSError:
+        return False
+
+
 def _require(table: dict, key: str, section: str):
     if key not in table:
         raise ConfigError(f"[{section}] is missing required key '{key}'")
@@ -259,15 +307,15 @@ def _validate_palworld(pal: PalworldConfig, *, check_paths: bool) -> None:
     if not check_paths:
         return
     level = pal.level_sav
-    if not level.is_file():
+    if not _probe(level, "[palworld] save_dir", "file"):
         raise ConfigError(
             f"[palworld] save_dir {pal.save_dir} does not contain a Level.sav"
         )
     if not os.access(level, os.R_OK):
-        raise ConfigError(f"[palworld] cannot read {level}")
+        raise _access_error(level, "[palworld] Level.sav")
     if pal.rcon_password_file is not None:
         secret = pal.rcon_password_file
-        if not secret.is_file():
+        if not _probe(secret, "[palworld] rcon_password_file", "file"):
             raise ConfigError(
                 f"[palworld] rcon_password_file {secret} does not exist"
             )
@@ -299,14 +347,14 @@ def _validate_palworld(pal: PalworldConfig, *, check_paths: bool) -> None:
 
 
 def _validate_writable_dir(path: Path, label: str) -> None:
-    if path.exists():
-        if not path.is_dir():
+    if _probe(path, label, "exists"):
+        if not _probe(path, label, "dir"):
             raise ConfigError(f"{label} {path} exists but is not a directory")
         if not os.access(path, os.W_OK | os.X_OK):
             raise ConfigError(f"{label} {path} is not writable by this process")
         return
     parent = path.parent
-    if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+    if not _probe(parent, label, "dir") or not os.access(parent, os.W_OK | os.X_OK):
         raise ConfigError(
             f"{label} {path} does not exist and its parent {parent} is not "
             "writable, so it cannot be created"

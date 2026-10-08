@@ -26,6 +26,19 @@
           <template #no-option>
             <q-item><q-item-section class="text-grey-6">No match</q-item-section></q-item>
           </template>
+
+          <!-- The id under the name: two items can read alike, and the id is
+               what actually goes into the save. -->
+          <template #option="scope">
+            <q-item v-bind="scope.itemProps">
+              <q-item-section>
+                <q-item-label>{{ scope.opt.label }}</q-item-label>
+                <q-item-label caption class="text-grey-6">
+                  {{ scope.opt.sublabel }}
+                </q-item-label>
+              </q-item-section>
+            </q-item>
+          </template>
         </q-select>
 
         <q-input
@@ -118,30 +131,50 @@ const countError = computed(() => {
   return ''
 })
 
+const LIMIT = 80
+
+function toOption (item) {
+  return {
+    item_id: item.item_id,
+    label: item.display_name || item.item_id,
+    // The internal id, shown underneath. The display name is the game's
+    // wording where it is known and derived from the id where it is not, so
+    // the id is what makes a row unambiguous.
+    sublabel: item.item_id,
+  }
+}
+
 const options = computed(() => {
   const term = needle.value.toLowerCase()
-  return catalog.items
+  const matches = catalog.items
     .filter((item) =>
       !term ||
       item.item_id.toLowerCase().includes(term) ||
       (item.display_name || '').toLowerCase().includes(term),
     )
-    .slice(0, 80)
-    .map((item) => ({
-      item_id: item.item_id,
-      // An id the catalogue has only observed is still offered, labelled so it
-      // is clear the name was not curated.
-      label: item.provenance === 'observed'
-        ? `${item.item_id} (unnamed)`
-        : item.display_name,
-    }))
+    .slice(0, LIMIT)
+    .map(toOption)
+
+  // The selected item has to be among the options or QSelect has no label to
+  // render for it and the field shows blank. With a few hundred items the
+  // slice almost never contains whatever the slot already held.
+  if (itemId.value && !matches.some((o) => o.item_id === itemId.value)) {
+    const current = catalog.items.find((i) => i.item_id === itemId.value)
+    matches.unshift(current
+      ? toOption(current)
+      : { item_id: itemId.value, label: itemId.value, sublabel: itemId.value })
+  }
+  return matches
 })
 
+// immediate, because the dialog is created with v-if once a slot is chosen:
+// the prop is already set on the first render, so a deferred watch never fires
+// and the field opens blank instead of showing what the slot holds.
 watch(() => props.slot, (slot) => {
   itemId.value = slot?.item_id || null
   stackCount.value = slot?.stack_count || 1
   needle.value = ''
-})
+}, { immediate: true })
 
 function filterItems (value, update) {
   update(() => { needle.value = value })

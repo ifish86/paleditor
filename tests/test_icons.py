@@ -214,3 +214,77 @@ def test_the_whole_live_catalogue_classifies(tmp_path):
     ]
     for item_id in sample:
         assert categorise(item_id), item_id
+
+
+# -- readable names ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "item_id,expected",
+    [
+        # The kind goes last, the way the game words it.
+        ("SkillCard_ThrowRock", "Throw Rock Skill Card"),
+        ("Blueprint_LaserRifle_2", "Laser Rifle Blueprint 2"),
+        ("SphereModule_Sniper", "Sniper Sphere Module"),
+        ("Meat_BerryGoat", "Berry Goat Meat"),
+        # A trailing tier belongs after the kind, not in front of it.
+        ("ExpBoost_03", "EXP Boost 3"),
+        ("PalEgg_Dark_05", "Dark Pal Egg 5"),
+        # Plain camelCase and lower-case ids.
+        ("CopperOre", "Copper Ore"),
+        ("PumpActionShotgun", "Pump Action Shotgun"),
+        ("bone", "Bone"),
+        # Acronyms the split cannot recover alone.
+        ("Accessory_HP_1", "HP Accessory 1"),
+        ("Blueprint_SFArmorCold_3", "SF Armor Cold Blueprint 3"),
+    ],
+)
+def test_a_readable_name_is_derived_from_the_id(item_id, expected):
+    """Not the exact in-game string - that lives in the game's localisation
+    data, which a dedicated server build does not ship - but much closer than
+    the raw id, and it covers every item."""
+    from paleditor.catalog import derive_display_name
+
+    assert derive_display_name(item_id) == expected
+
+
+def test_an_id_that_derives_to_nothing_falls_back_to_itself():
+    from paleditor.catalog import derive_display_name
+
+    assert derive_display_name("_") == "_"
+
+
+def test_observed_items_are_recorded_with_a_derived_name(config, conn):
+    from paleditor import ingest
+
+    ingest.run(config, conn=conn)
+    row = conn.execute(
+        "SELECT display_name FROM items WHERE item_id = 'Paldium'"
+    ).fetchone()
+    assert row["display_name"] == "Paldium"
+
+    conn.execute(
+        "INSERT INTO items(item_id, display_name, category, provenance) "
+        "VALUES ('SkillCard_TestOnly', 'SkillCard_TestOnly', 'skill', 'observed')"
+    )
+    conn.commit()
+    from paleditor import catalog
+
+    catalog.record_observed(conn)
+    row = conn.execute(
+        "SELECT display_name FROM items WHERE item_id = 'SkillCard_TestOnly'"
+    ).fetchone()
+    assert row["display_name"] == "Test Only Skill Card"
+
+
+def test_a_curated_name_is_never_overwritten_by_a_derived_one(config, conn):
+    """items.json is the authority: 'Quality Wood' must not become 'Wood Fine'."""
+    from paleditor import catalog, ingest
+
+    ingest.run(config, conn=conn)
+    catalog.record_observed(conn)
+    row = conn.execute(
+        "SELECT display_name, provenance FROM items WHERE item_id = 'Wood_Fine'"
+    ).fetchone()
+    assert row["provenance"] == "seed"
+    assert row["display_name"] == "Quality Wood"

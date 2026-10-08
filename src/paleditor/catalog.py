@@ -70,6 +70,75 @@ def tokens(item_id: str) -> list[str]:
     return [part.lower() for part in _TOKEN_SPLIT.split(item_id) if part]
 
 
+# Internal ids put the kind first; the game puts it last. Reordering these
+# turns "SkillCard_ThrowRock" into "Throw Rock Skill Card", which is what
+# somebody looking at the item in game would recognise.
+TRAILING_KINDS: tuple[tuple[str, str], ...] = (
+    ("Blueprint_", "Blueprint"),
+    ("SkillCard_", "Skill Card"),
+    ("SphereModule_", "Sphere Module"),
+    ("PalEgg_", "Pal Egg"),
+    ("Meat_", "Meat"),
+    ("TechnologyBook_", "Technology Book"),
+    ("AncientTechnologyBook_", "Ancient Technology Book"),
+    ("FishingBait_", "Fishing Bait"),
+    ("ExpBoost_", "EXP Boost"),
+    ("Accessory_", "Accessory"),
+)
+
+# Spellings the split cannot recover on its own.
+WORD_FIXES: dict[str, str] = {
+    "Pal": "Pal",
+    "Hp": "HP",
+    "Sf": "SF",
+    "Ar": "AR",
+    "Npc": "NPC",
+    "Exp": "EXP",
+    "Sp": "SP",
+}
+
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])")
+
+
+def derive_display_name(item_id: str) -> str:
+    """A readable name for an id nobody has curated.
+
+    Not the exact in-game string - that lives in the game's localisation data,
+    which a dedicated server build does not ship - but much closer than the raw
+    id, and it covers every item rather than the handful the wiki can match.
+    """
+    text = item_id
+    suffix = ""
+    for prefix, kind in TRAILING_KINDS:
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            suffix = f" {kind}"
+            break
+
+    words: list[str] = []
+    for chunk in text.split("_"):
+        if not chunk:
+            continue
+        for word in _CAMEL.split(chunk):
+            if not word:
+                continue
+            if word.isdigit():
+                words.append(word.lstrip("0") or "0")
+            else:
+                capitalised = word.capitalize()
+                words.append(WORD_FIXES.get(capitalised, capitalised))
+
+    # Trailing tier markers belong after the kind, not in front of it:
+    # ExpBoost_03 reads as "EXP Boost 3", never "3 EXP Boost".
+    tier: list[str] = []
+    while words and (words[-1].isdigit() or (len(words[-1]) == 1 and words[-1].isalpha())):
+        tier.insert(0, words.pop())
+
+    parts = [" ".join(words).strip(), suffix.strip(), " ".join(tier).strip()]
+    name = " ".join(part for part in parts if part)
+    return name or item_id
+
+
 def categorise(item_id: str | None) -> str:
     """Sort an item id into a category, defaulting to 'material'.
 
@@ -158,7 +227,19 @@ def record_observed(conn: sqlite3.Connection) -> int:
         conn.executemany(
             "INSERT INTO items(item_id, display_name, category, max_stack, provenance) "
             "VALUES (?, ?, ?, NULL, 'observed')",
-            [(item_id, item_id, categorise(item_id)) for item_id in unknown],
+            [
+                (item_id, derive_display_name(item_id), categorise(item_id))
+                for item_id in unknown
+            ],
+        )
+    # Rows recorded before names were derived still carry their raw id.
+    for row in conn.execute(
+        "SELECT item_id FROM items WHERE provenance = 'observed' "
+        "AND display_name = item_id"
+    ).fetchall():
+        conn.execute(
+            "UPDATE items SET display_name = ? WHERE item_id = ?",
+            (derive_display_name(row["item_id"]), row["item_id"]),
         )
     # Rows seeded before the category rules existed, or seeded without one,
     # would otherwise leave holes in the grid.

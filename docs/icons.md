@@ -60,6 +60,30 @@ Fandom's CDN content-negotiates: a `.png` URL commonly returns WebP. The stored
 format is taken from the file's own bytes, not its URL, and anything that is
 not a real image — an error page, say — is discarded rather than saved.
 
+## Item names
+
+The picker and the slot grid show the game's wording, not the save's. For an
+item nobody has curated, the name is derived from its id:
+
+| in the save | shown |
+| --- | --- |
+| `SkillCard_ThrowRock` | Throw Rock Skill Card |
+| `Blueprint_LaserRifle_2` | Laser Rifle Blueprint 2 |
+| `ExpBoost_03` | EXP Boost 3 |
+| `Meat_BerryGoat` | Berry Goat Meat |
+
+The kind moves to the end, because internal ids lead with it and the game does
+not, and a trailing tier number stays last. This is not the exact in-game
+string — that lives in the game's localisation tables, and a dedicated server
+build does not ship them; the paks reference `/Game/L10N/.../DT_*` but carry no
+text, since a server renders none. A curated name in
+[`data/items.json`](../src/paleditor/data/items.json) always wins, so anything
+worth getting exactly right can be set there.
+
+The internal id is shown under each name in the item picker. Two items can read
+alike once their ids are prettified, and the id is what actually goes into the
+save.
+
 ## Improving coverage
 
 Name items in [`data/items.json`](../src/paleditor/data/items.json) and re-run.

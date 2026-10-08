@@ -78,34 +78,52 @@ def run_if_changed(
             conn.close()
 
 
-def _pick_source(config: Config):
-    prefer_backup = (
-        config.palworld.read_from_backup
-        and config.palworld.save_backend != "fixture"
-    )
+def _pick_source(config: Config, prefer_backup: bool | None = None):
+    """Which Level.sav to read.
+
+    A completed snapshot by default: the server rewrites the live file every
+    ~30s and a read landing mid-write returns a torn save. The fixture backend
+    has no server behind it, so there is nothing to race. A caller that has
+    just written the live file passes False, because a snapshot would not
+    contain what it is trying to read back.
+    """
+    if prefer_backup is None:
+        prefer_backup = (
+            config.palworld.read_from_backup
+            and config.palworld.save_backend != "fixture"
+        )
     return savesource.pick(config.palworld.save_dir, prefer_backup=prefer_backup)
 
 
-def run(config: Config, *, conn: sqlite3.Connection | None = None) -> IngestResult:
-    """Parse the save and write a new rev. Raises on any format mismatch."""
+def run(
+    config: Config,
+    *,
+    conn: sqlite3.Connection | None = None,
+    prefer_backup: bool | None = None,
+) -> IngestResult:
+    """Parse the save and write a new rev. Raises on any format mismatch.
+
+    ``prefer_backup`` overrides the configured choice of source. The
+    maintenance window passes False: it has just written Level.sav and needs
+    to read back exactly that, not a snapshot the server may have written
+    since.
+    """
     own_conn = conn is None
     if own_conn:
         db.init(config.database.path)
         conn = db.connect(config.database.path)
     try:
-        return _run(config, conn)
+        return _run(config, conn, prefer_backup=prefer_backup)
     finally:
         if own_conn:
             conn.close()
 
 
-def _run(config: Config, conn: sqlite3.Connection) -> IngestResult:
+def _run(
+    config: Config, conn: sqlite3.Connection, *, prefer_backup: bool | None = None
+) -> IngestResult:
     backend = _backend_for(config)
-    # Prefer a completed snapshot. Reading the live file while the server is
-    # writing it returns a torn save, which is the single easiest way to ingest
-    # a world that never existed. The fixture backend has no server behind it,
-    # so there is nothing to race and nothing to warn about.
-    source = _pick_source(config)
+    source = _pick_source(config, prefer_backup)
     level = source.level_sav
     started = time.monotonic()
     log.info("ingesting from %s (%s)", level, source.label)

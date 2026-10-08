@@ -126,3 +126,48 @@ def test_wait_until_responsive_gives_up_on_a_dead_server():
     assert wait_until_responsive(
         "127.0.0.1", port, PASSWORD, timeout=1.0, interval=0.2
     ) is False
+
+
+# -- Palworld's loose request ids ------------------------------------------
+
+
+class IdZeroServer(FakeRconServer):
+    """Answers every packet with id 0, the way Palworld does."""
+
+    def _serve(self) -> None:
+        try:
+            conn, _ = self._sock.accept()
+        except OSError:
+            return
+        with conn:
+            try:
+                _read_packet(conn)
+                conn.sendall(_pack(0, 2, ""))      # auth ok, id 0 not the sent id
+                while True:
+                    _, _, body = _read_packet(conn)
+                    self.commands.append(body)
+                    conn.sendall(_pack(0, 0, f"ok: {body}"))
+            except (ConnectionError, OSError, struct.error):
+                return
+
+
+def test_a_server_that_does_not_echo_request_ids_still_works():
+    """Palworld answers with id 0 regardless of what was sent.
+
+    Treating that as an error meant every graceful shutdown fell back to
+    killing the unit, and the post-restart RCON check could never succeed - so
+    every window spent its full RCON timeout waiting for nothing.
+    """
+    with IdZeroServer() as server:
+        with RconClient("127.0.0.1", server.port, PASSWORD, timeout=5.0) as client:
+            assert client.save() == "ok: Save"
+            client.shutdown(60, "paleditor maintenance")
+        assert server.commands == ["Save", "Shutdown 60 paleditor_maintenance"]
+
+
+def test_a_wrong_password_is_still_rejected():
+    """Loosening the id check must not loosen authentication: -1 is the
+    protocol's way of saying the password was wrong."""
+    with FakeRconServer(reject_auth=True) as server:
+        with pytest.raises(RconError, match="wrong password"):
+            RconClient("127.0.0.1", server.port, PASSWORD, timeout=5.0).connect()

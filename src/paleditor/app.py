@@ -27,6 +27,7 @@ def create_app(config: Config, *, start_scheduler: bool = True) -> FastAPI:
     async def lifespan(app: FastAPI):
         db.init(config.database.path)
         _seed_items(config)
+        _recover_interrupted_window(config)
         ingest_worker = None
         if config.ingest.enabled:
             ingest_worker = IntervalWorker(
@@ -144,6 +145,19 @@ def _seed_items(config: Config) -> None:
     with db.closing_connect(config.database.path) as conn:
         count = catalog.seed(conn)
     log.info("seeded %s item(s) into the catalogue", count)
+
+
+def _recover_interrupted_window(config: Config) -> None:
+    """Settle edits a window left mid-flight before this process restarted."""
+    from .maintenance import recover_orphaned
+
+    try:
+        settled = recover_orphaned(config)
+    except Exception:
+        log.exception("could not settle edits left by an interrupted window")
+        return
+    if settled:
+        log.warning("settled %s edit(s) left behind by an interrupted window", settled)
 
 
 def _periodic_ingest(config: Config) -> None:

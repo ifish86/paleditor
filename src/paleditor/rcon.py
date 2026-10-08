@@ -99,25 +99,36 @@ class RconClient:
         return request_id, packet_type, body
 
     def _authenticate(self) -> None:
-        sent_id = self._send(SERVERDATA_AUTH, self._password)
+        self._send(SERVERDATA_AUTH, self._password)
         # Some servers send an empty RESPONSE_VALUE before the auth response.
         for _ in range(3):
             request_id, packet_type, _ = self._recv()
             if packet_type == SERVERDATA_AUTH_RESPONSE:
+                # -1 is the protocol's "wrong password". Any other id means
+                # success: Palworld does not echo the request id reliably, and
+                # insisting that it does rejected a working connection.
                 if request_id == -1:
                     raise RconError("RCON authentication failed: wrong password")
-                if request_id != sent_id:
-                    raise RconError("RCON authentication returned a mismatched id")
                 return
         raise RconError("RCON authentication did not return a response")
 
     # -- commands ----------------------------------------------------------
 
     def command(self, body: str) -> str:
+        """Run one command and return its response.
+
+        The request id is logged when it does not come back, but not enforced.
+        Palworld answers with id 0 regardless of what was sent, and treating
+        that as an error meant every graceful shutdown fell back to killing
+        the unit, and the post-restart RCON check could never succeed.
+        """
         sent_id = self._send(SERVERDATA_EXECCOMMAND, body)
         request_id, _, response = self._recv()
         if request_id != sent_id:
-            raise RconError(f"RCON response id {request_id} did not match {sent_id}")
+            log.debug(
+                "RCON answered %r with id %s, expected %s; ids are advisory here",
+                body.split(" ", 1)[0], request_id, sent_id,
+            )
         return response
 
     def save(self) -> str:

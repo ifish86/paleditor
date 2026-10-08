@@ -51,6 +51,12 @@ BACKUP_SUFFIX = ".sav"
 MIN_SIZE_RATIO = 0.5
 MAX_SIZE_RATIO = 2.0
 
+# How long to wait for the restarted server to answer RCON. Informational
+# only - the edits have been verified by this point - so it is short. It used
+# to be 180s, spent before verification, which is what left edits showing
+# 'applying' for minutes after the work was done.
+RCON_READY_TIMEOUT = 45.0
+
 
 @dataclass
 class WindowReport:
@@ -203,6 +209,13 @@ def _sequence(
             _mark_failed(conn, edit_id, reason)
         report.failed = len(apply_report.failed)
 
+        # Step 7, done here rather than after the restart. The server is still
+        # stopped, so Level.sav is exactly what was just written and nothing
+        # can change underneath. Verifying after the restart raced the game's
+        # own saving: it rewrites the file within a save cycle, so the counts
+        # being compared could already reflect play since the window.
+        _verify(config, conn, report)
+
     except Exception as exc:
         report.error = str(exc)
         if wrote_save and not report.restored:
@@ -220,7 +233,7 @@ def _sequence(
         log.error("maintenance window failed: %s", exc)
         return _finish(config, control, report, started_running, conn)
 
-    return _finish(config, control, report, started_running, conn, verify=True)
+    return _finish(config, control, report, started_running, conn)
 
 
 def _finish(
@@ -229,40 +242,41 @@ def _finish(
     report: WindowReport,
     started_running: bool,
     conn: sqlite3.Connection,
-    *,
-    verify: bool = False,
 ) -> WindowReport:
-    """Step 6 and 7. Always starts the server, whatever happened above."""
+    """Step 6. Always starts the server, whatever happened above.
+
+    Verification has already run by this point, with the server still down, so
+    nothing here can change an edit's outcome.
+    """
+    start_failed = None
     try:
         if started_running:
             control.start()
             report.server_restarted = True
             report.step(f"started {config.palworld.server_unit}")
-            if config.palworld.rcon_password_file is not None:
-                try:
-                    responsive = wait_until_responsive(
-                        config.palworld.rcon_host,
-                        config.palworld.rcon_port,
-                        config.palworld.rcon_password(),
-                        timeout=180.0,
-                    )
-                    report.step(
-                        "server is accepting RCON" if responsive
-                        else "server started but RCON did not answer within 180s"
-                    )
-                except Exception as exc:  # never let this mask the outcome
-                    report.step(f"could not confirm RCON after start: {exc}")
     except Exception as exc:
         # The ugliest branch, and the most important. A window that leaves the
         # server down is worse than a window that fails.
-        message = f"FAILED TO START {config.palworld.server_unit}: {exc}"
-        log.critical(message)
-        report.step(message)
-        report.error = (report.error + "; " if report.error else "") + message
-        return report
+        start_failed = f"FAILED TO START {config.palworld.server_unit}: {exc}"
+        log.critical(start_failed)
+        report.step(start_failed)
+        report.error = (report.error + "; " if report.error else "") + start_failed
 
-    if verify:
-        _verify(config, conn, report)
+    if start_failed is None and started_running and config.palworld.rcon_password_file:
+        try:
+            responsive = wait_until_responsive(
+                config.palworld.rcon_host,
+                config.palworld.rcon_port,
+                config.palworld.rcon_password(),
+                timeout=RCON_READY_TIMEOUT,
+            )
+            report.step(
+                "server is accepting RCON" if responsive
+                else f"server started but RCON did not answer within "
+                     f"{RCON_READY_TIMEOUT:.0f}s"
+            )
+        except Exception as exc:  # never let this mask the outcome
+            report.step(f"could not confirm RCON after start: {exc}")
     return report
 
 
@@ -360,6 +374,86 @@ def record_outcome(config: Config, report: "WindowReport") -> None:
             conn.commit()
     except Exception:
         log.exception("could not record the window outcome")
+
+
+def recover_orphaned(config: Config) -> int:
+    """Settle edits left 'applying' by a window that never finished.
+
+    A window marks its batch 'applying' before it touches anything, and moves
+    each edit to 'applied' or 'failed' at the end. If the process dies in
+    between - a restart, a crash, a reboot - the rows stay 'applying' and
+    nothing ever revisits them: the next window only claims 'queued' ones.
+
+    The save has already been written by then, so these are checked the same
+    way the window checks its own: compare the slot against the last ingest.
+    Where it matches, the edit did land. Where it does not, it is failed with
+    a reason rather than silently retried against a world that has moved on.
+    """
+    if FileLock(config.maintenance.lock_file).is_locked():
+        return 0  # a window is running; those rows are its business
+
+    with db.closing_connect(config.database.path) as conn:
+        rows = conn.execute(
+            "SELECT id, container_guid, slot_index, item_id, stack_count "
+            "FROM pending_edits WHERE status = 'applying'"
+        ).fetchall()
+        if not rows:
+            return 0
+
+        log.warning(
+            "%s edit(s) were left 'applying' by a window that did not finish; "
+            "checking them against the last ingest",
+            len(rows),
+        )
+        settled = 0
+        for row in rows:
+            actual = conn.execute(
+                "SELECT item_id, stack_count FROM slots "
+                "WHERE container_guid = ? AND slot_index = ?",
+                (row["container_guid"], row["slot_index"]),
+            ).fetchone()
+            if _landed(row, actual):
+                with db.transaction(conn):
+                    conn.execute(
+                        "UPDATE pending_edits SET status='applied', applied_at=?, "
+                        "error=NULL WHERE id=?",
+                        (db.utcnow(), row["id"]),
+                    )
+            else:
+                found = (
+                    f"{actual['item_id']}x{actual['stack_count']}"
+                    if actual else "nothing"
+                )
+                _mark_failed(
+                    conn, row["id"],
+                    "a maintenance window was interrupted before this edit "
+                    f"could be confirmed, and the slot now holds {found}",
+                )
+            settled += 1
+        return settled
+
+
+def _landed(row, actual) -> bool:
+    """Whether an interrupted edit looks as though it took effect.
+
+    Deliberately looser than the window's own check, which compares the exact
+    stack because it runs with the server stopped, moments after the write.
+    This runs later - after a restart, possibly after hours of play - so the
+    count will have moved for anything anyone is using. Matching on the item
+    alone is the honest reading: a slot now holding 9,919 of what the edit put
+    there is the edit having worked, not having failed.
+
+    It cannot distinguish an edit that landed from one that did not when the
+    slot already held the same item. That ambiguity is the price of being
+    interrupted, and it resolves towards 'applied' rather than inventing a
+    failure.
+    """
+    wanted_clear = row["item_id"] is None or row["stack_count"] <= 0
+    if actual is None or actual["item_id"] is None:
+        return wanted_clear
+    if wanted_clear:
+        return False
+    return actual["item_id"] == row["item_id"]
 
 
 def last_outcome(conn) -> dict | None:
@@ -585,7 +679,9 @@ def _verify(config: Config, conn: sqlite3.Connection, report: WindowReport) -> N
     than retried silently.
     """
     try:
-        ingest.run(config, conn=conn)
+        # The live file, not a snapshot: this is reading back what the window
+        # just wrote, and a snapshot would not contain it.
+        ingest.run(config, conn=conn, prefer_backup=False)
     except (SaveFormatError, Exception) as exc:
         report.step(f"reingest after the write failed: {exc}")
         _fail_batch(conn, report.batch_id, f"could not verify: {exc}")

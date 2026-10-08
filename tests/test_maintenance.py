@@ -561,3 +561,143 @@ def test_a_refusal_is_recorded_too(config, conn, ingested, save_dir, fake_contro
     assert outcome is not None
     assert outcome["ok"] is False
     assert "check-write" in outcome["error"]
+
+
+# -- edits left behind by an interrupted window ----------------------------
+
+
+def test_edits_left_applying_are_settled_on_the_next_start(
+    config, conn, ingested, fake_control
+):
+    """A window marks its batch 'applying' before touching anything and
+    settles it at the end. Killed in between - a restart, a crash - the rows
+    stayed 'applying' for good: the next window only claims 'queued' ones.
+    """
+    from paleditor.maintenance import recover_orphaned
+
+    edit_id = queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+    assert status_of(conn, edit_id)["status"] == "applied"
+
+    # Put it back as an interrupted window would have left it.
+    conn.execute(
+        "UPDATE pending_edits SET status='applying', applied_at=NULL WHERE id=?",
+        (edit_id,),
+    )
+    conn.commit()
+
+    assert recover_orphaned(config) == 1
+    assert status_of(conn, edit_id)["status"] == "applied"
+
+
+def test_recovery_tolerates_a_count_that_has_moved_since(
+    config, conn, ingested, fake_control
+):
+    """The real case: 9999 Pal Souls were put in, then played with.
+
+    Recovery runs after a restart, possibly hours later. Comparing the exact
+    stack marked every such edit failed, when the item sitting in the slot is
+    the edit having worked.
+    """
+    from paleditor.maintenance import recover_orphaned
+
+    edit_id = queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+    conn.execute(
+        "UPDATE pending_edits SET status='applying', applied_at=NULL WHERE id=?",
+        (edit_id,),
+    )
+    conn.execute(
+        "UPDATE slots SET stack_count = 37 WHERE container_guid = ? AND slot_index = 0",
+        (EMPTY_CHEST,),
+    )
+    conn.commit()
+
+    assert recover_orphaned(config) == 1
+    assert status_of(conn, edit_id)["status"] == "applied"
+
+
+def test_recovery_fails_an_edit_whose_item_is_not_there(
+    config, conn, ingested, fake_control
+):
+    from paleditor.maintenance import recover_orphaned
+
+    edit_id = queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+    conn.execute(
+        "UPDATE pending_edits SET status='applying', applied_at=NULL WHERE id=?",
+        (edit_id,),
+    )
+    conn.execute(
+        "UPDATE slots SET item_id = 'Stone' WHERE container_guid = ? AND slot_index = 0",
+        (EMPTY_CHEST,),
+    )
+    conn.commit()
+
+    assert recover_orphaned(config) == 1
+    row = status_of(conn, edit_id)
+    assert row["status"] == "failed"
+    assert "now holds Stonex" in row["error"]
+
+
+def test_recovery_leaves_a_running_window_alone(config, conn, ingested):
+    """Those rows belong to the worker that claimed them."""
+    from paleditor.locking import FileLock
+    from paleditor.maintenance import recover_orphaned
+
+    queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    conn.execute("UPDATE pending_edits SET status='applying'")
+    conn.commit()
+    with FileLock(config.maintenance.lock_file):
+        assert recover_orphaned(config) == 0
+    assert conn.execute(
+        "SELECT status FROM pending_edits"
+    ).fetchone()["status"] == "applying"
+
+
+def test_verification_reads_the_file_the_window_wrote(
+    config, conn, ingested, fake_control, monkeypatch
+):
+    """Not a backup snapshot. Verifying after the restart raced the game's own
+    saving, so the counts compared could already reflect play since."""
+    seen = {}
+    import paleditor.ingest as ingest_module
+
+    original = ingest_module.run
+
+    def record(cfg, *, conn=None, prefer_backup=None):
+        seen["prefer_backup"] = prefer_backup
+        return original(cfg, conn=conn, prefer_backup=prefer_backup)
+
+    monkeypatch.setattr(ingest_module, "run", record)
+    queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+    run_window(config, control=fake_control, rcon_factory=lambda: FakeRcon())
+    assert seen.get("prefer_backup") is False
+
+
+def test_the_server_is_started_after_verification_not_before(
+    config, conn, ingested
+):
+    """So the save cannot change underneath the check."""
+    order = []
+
+    class Recording(FakeServerControl):
+        def start(self):
+            order.append("start")
+            super().start()
+
+    import paleditor.maintenance as mod
+
+    original_verify = mod._verify
+
+    def verify(cfg, conn_, report):
+        order.append("verify")
+        return original_verify(cfg, conn_, report)
+
+    mod._verify = verify
+    try:
+        queue_edit(conn, EMPTY_CHEST, 0, "Wood", 50)
+        run_window(config, control=Recording(), rcon_factory=lambda: FakeRcon())
+    finally:
+        mod._verify = original_verify
+    assert order == ["verify", "start"], order

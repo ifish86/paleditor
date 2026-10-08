@@ -42,6 +42,31 @@ Build the frontend, which the API then serves from `frontend/dist/spa`:
 cd frontend && npm ci && npx quasar build
 ```
 
+## After a fresh clone
+
+Four things paleditor needs are built rather than committed, so a new clone —
+or a directory deleted and re-cloned — has none of them:
+
+| | |
+| --- | --- |
+| `.venv/` | the Python environment |
+| `lib/libooz.so` | the Oodle decompressor ([docs/oodle.md](oodle.md)) |
+| `frontend/node_modules`, `frontend/dist/spa` | the web UI |
+
+`/etc/paleditor/paleditor.toml`, the secret and the systemd unit live outside
+the repo, so those survive. Rebuild the rest with:
+
+```bash
+cd /opt/paleditor
+scripts/setup.sh --save-dir "/home/palworld/palworld-server/Pal/Saved/SaveGames/0/<world-id>"
+systemctl restart paleditor
+```
+
+Run it as the same user that owns the checkout. Running it as root leaves a
+root-owned `.venv`, which is fine — the service only needs to read it — but
+nothing in `/opt/paleditor` should need writing at runtime; the database and
+backups live in `/var/lib/paleditor`.
+
 ## Configure
 
 ```bash

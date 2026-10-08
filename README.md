@@ -66,6 +66,14 @@ Nothing below needs a Palworld server: the `fixture` backend reads a JSON world
 instead of a compressed save.
 
 ```bash
+scripts/setup.sh --no-frontend
+.venv/bin/python -m pytest
+```
+
+`setup.sh` rebuilds everything a clone does not carry: the virtualenv, the
+Oodle decompressor and the web UI. By hand, if you prefer:
+
+```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest

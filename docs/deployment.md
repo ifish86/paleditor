@@ -62,10 +62,34 @@ scripts/setup.sh --save-dir "/home/palworld/palworld-server/Pal/Saved/SaveGames/
 systemctl restart paleditor
 ```
 
-Run it as the same user that owns the checkout. Running it as root leaves a
-root-owned `.venv`, which is fine — the service only needs to read it — but
-nothing in `/opt/paleditor` should need writing at runtime; the database and
-backups live in `/var/lib/paleditor`.
+### Who should own the checkout
+
+The person who maintains it, not the service. paleditor only ever **reads**
+`/opt/paleditor` — `ProtectSystem=strict` stops it writing there even if it
+tried — while the database, backups and icons all live in `/var/lib/paleditor`.
+
+A root-owned checkout means `git pull`, `npm run dev` and `quasar build` all
+need `sudo`, and the dev server fails outright:
+
+```
+Error: EACCES: permission denied, open '/opt/paleditor/frontend/.quasar/app.js'
+```
+
+So hand it to yourself:
+
+```bash
+sudo chown -R "$USER" /opt/paleditor
+```
+
+Directories stay `755` and files `644`, so the service user can still read
+everything it needs. `setup.sh` run as root now gives its artefacts back to the
+checkout's owner for the same reason.
+
+Commands that write the *state* directory still run as the service user:
+
+```bash
+sudo -u palworld /opt/paleditor/.venv/bin/paleditor ingest -c /etc/paleditor/paleditor.toml
+```
 
 ## Configure
 

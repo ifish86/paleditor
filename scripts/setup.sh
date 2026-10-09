@@ -35,6 +35,18 @@ cd "$ROOT"
 problems=()
 note() { printf '  %s\n' "$*"; }
 
+# Running this as root leaves a root-owned .venv, node_modules and .quasar, and
+# then 'npm run dev' or 'git pull' as yourself fails with EACCES. The service
+# only ever reads the checkout, so it does not need to own it.
+if [ "$(id -u)" -eq 0 ]; then
+  owner="$(stat -c '%U' "$ROOT")"
+  if [ "$owner" != "root" ]; then
+    note "running as root in a checkout owned by $owner"
+    note "  files created here will be root-owned and $owner will not be able"
+    note "  to build or pull afterwards. Re-run as $owner, or chown back after."
+  fi
+fi
+
 echo "==> python environment"
 if [ ! -x .venv/bin/python ]; then
   python3 -m venv .venv
@@ -67,6 +79,15 @@ else
   ( cd frontend && npm install --silent && npx quasar build >/dev/null ) \
     && note "built frontend/dist/spa" \
     || problems+=("the frontend build failed; the API still works without it")
+fi
+
+# A build that leaves artefacts the checkout's owner cannot write is a trap
+# sprung later, so say so now.
+owner="$(stat -c '%U' "$ROOT")"
+if [ "$(id -u)" -eq 0 ] && [ "$owner" != "root" ]; then
+  chown -R "$owner" "$ROOT/.venv" "$ROOT/lib" "$ROOT/frontend/node_modules" \
+    "$ROOT/frontend/.quasar" "$ROOT/frontend/dist" 2>/dev/null || true
+  note "gave the new files back to $owner"
 fi
 
 echo

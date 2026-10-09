@@ -208,6 +208,51 @@ def seed(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+def import_game_names(conn: sqlite3.Connection, names: dict[str, str]) -> int:
+    """Load item ids and display names read from the game's own data.
+
+    These outrank everything else. They are the strings the game shows, so a
+    hand-written guess that disagrees is simply wrong - "Quality Wood" for
+    Wood_Fine, which the game calls Hardwood.
+
+    Items the world has never contained are included: the picker needs to
+    offer what could be put in a chest, not only what is already in one.
+    """
+    if not names:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO items(item_id, display_name, category, max_stack, provenance)
+        VALUES (:item_id, :display_name, :category, NULL, 'gamefiles')
+        ON CONFLICT(item_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            category     = excluded.category,
+            provenance   = 'gamefiles'
+        WHERE items.provenance != 'confirmed'
+        """,
+        [
+            {
+                "item_id": item_id,
+                "display_name": display,
+                "category": categorise(item_id),
+            }
+            for item_id, display in names.items()
+        ],
+    )
+    mark_in_world(conn)
+    conn.commit()
+    return len(names)
+
+
+def mark_in_world(conn: sqlite3.Connection) -> None:
+    """Flag the items this world actually contains."""
+    conn.execute("UPDATE items SET in_world = 0")
+    conn.execute(
+        "UPDATE items SET in_world = 1 WHERE item_id IN "
+        "(SELECT DISTINCT item_id FROM slots WHERE item_id IS NOT NULL)"
+    )
+
+
 def record_observed(conn: sqlite3.Connection) -> int:
     """File every unknown id the world holds as 'observed'.
 
@@ -241,6 +286,7 @@ def record_observed(conn: sqlite3.Connection) -> int:
             "UPDATE items SET display_name = ? WHERE item_id = ?",
             (derive_display_name(row["item_id"]), row["item_id"]),
         )
+    mark_in_world(conn)
     # Rows seeded before the category rules existed, or seeded without one,
     # would otherwise leave holes in the grid.
     for row in conn.execute(

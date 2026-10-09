@@ -157,6 +157,15 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="re-download icons already present")
     p.set_defaults(handler=_fetch_icons)
 
+    p = with_config(sub.add_parser(
+        "import-item-names",
+        help="read every item id and name from the game's own data files",
+    ))
+    p.add_argument("--pak", type=Path, default=None,
+                   help="the game's .pak (default: found from save_dir)")
+    p.add_argument("--language", default="en")
+    p.set_defaults(handler=_import_item_names)
+
     p = with_config(sub.add_parser("init-db", help="create the database schema"))
     p.set_defaults(handler=_init_db)
 
@@ -582,6 +591,39 @@ def _fetch_icons(args) -> int:
             "Until then\nthey render as their category colour, which every "
             "item has."
         )
+    return 0
+
+
+def _import_item_names(args) -> int:
+    """Teach the catalogue every item the game knows, and its real name."""
+    from . import catalog, db
+    from .gamedata import find_pak, item_names
+
+    config = _load(args, check_paths=False)
+    pak = args.pak or config.palworld.pak_file or find_pak(config.palworld.save_dir)
+    if pak is None or not Path(pak).is_file():
+        print(
+            "could not find the game's .pak. Pass --pak, or set "
+            "[palworld] pak_file.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"reading {pak}")
+    names = item_names(
+        Path(pak),
+        language=args.language,
+        oodle_library=config.palworld.oodle_library,
+    )
+    db.init(config.database.path)
+    with db.closing_connect(config.database.path) as conn:
+        imported = catalog.import_game_names(conn, names)
+        total = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        here = conn.execute(
+            "SELECT COUNT(*) FROM items WHERE in_world = 1"
+        ).fetchone()[0]
+    print(f"  imported {imported} item name(s)")
+    print(f"  catalogue now holds {total}, of which {here} are in this world")
     return 0
 
 

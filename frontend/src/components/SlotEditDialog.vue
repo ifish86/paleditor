@@ -37,6 +37,9 @@
                   {{ scope.opt.sublabel }}
                 </q-item-label>
               </q-item-section>
+              <q-item-section v-if="!scope.opt.inWorld" side>
+                <q-badge outline color="grey-6" label="not here yet" />
+              </q-item-section>
             </q-item>
           </template>
         </q-select>
@@ -131,16 +134,18 @@ const countError = computed(() => {
   return ''
 })
 
-const LIMIT = 80
+const LIMIT = 60
 
 function toOption (item) {
   return {
     item_id: item.item_id,
     label: item.display_name || item.item_id,
-    // The internal id, shown underneath. The display name is the game's
-    // wording where it is known and derived from the id where it is not, so
-    // the id is what makes a row unambiguous.
+    // The internal id, shown underneath: two items can read alike, and the id
+    // is what actually goes into the save.
     sublabel: item.item_id,
+    // Whether this world already contains any. The picker offers the game's
+    // whole catalogue, so most entries are things no chest here has held.
+    inWorld: Boolean(item.in_world),
   }
 }
 

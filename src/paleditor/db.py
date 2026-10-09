@@ -57,6 +57,7 @@ _ADDED_COLUMNS = (
     ("chests", "lockable", "INTEGER NOT NULL DEFAULT 0"),
     ("chests", "has_container", "INTEGER NOT NULL DEFAULT 1"),
     ("items", "icon", "TEXT"),
+    ("items", "in_world", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

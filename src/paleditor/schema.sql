@@ -83,10 +83,15 @@ CREATE TABLE IF NOT EXISTS items (
     display_name TEXT NOT NULL,
     category     TEXT,
     max_stack    INTEGER,
-    -- 'seed'     : shipped with the app
+    -- 'gamefiles': read from the game's own localisation table, so these are
+    --              the names the game itself shows and the ids it knows
     -- 'confirmed': read back from a live container dump
-    -- 'observed' : seen in a save but not yet named by hand
+    -- 'seed'     : shipped with the app, a hand-written guess
+    -- 'observed' : seen in a save, named by deriving one from the id
     provenance   TEXT NOT NULL DEFAULT 'seed',
+    -- Whether this item has actually been seen in this world. Everything from
+    -- the game files is offerable; only some of it is present.
+    in_world     INTEGER NOT NULL DEFAULT 0,
     -- Filename of a downloaded icon, relative to the icon directory, or NULL.
     -- Icons are fetched by 'paleditor fetch-icons' and never committed: they
     -- are the game publisher's artwork. An item without one falls back to its

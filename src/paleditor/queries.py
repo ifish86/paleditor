@@ -299,18 +299,22 @@ def edit(conn: sqlite3.Connection, edit_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+# Items already in the world come first: those are the ones somebody is most
+# likely to be topping up. The rest of the game's catalogue follows, so a chest
+# can be given something it has never held.
+ITEM_ORDER = "ORDER BY in_world DESC, display_name, item_id"
+
+
 def items(conn: sqlite3.Connection, *, term: str | None = None) -> list[dict]:
     if term:
         like = f"%{term.strip()}%"
         rows = conn.execute(
-            "SELECT * FROM items WHERE item_id LIKE ? OR display_name LIKE ? "
-            "ORDER BY provenance = 'observed', display_name LIMIT 500",
+            f"SELECT * FROM items WHERE item_id LIKE ? OR display_name LIKE ? "
+            f"{ITEM_ORDER} LIMIT 500",
             (like, like),
         ).fetchall()
     else:
-        rows = conn.execute(
-            "SELECT * FROM items ORDER BY provenance = 'observed', display_name"
-        ).fetchall()
+        rows = conn.execute(f"SELECT * FROM items {ITEM_ORDER}").fetchall()
     return [dict(row) for row in rows]
 
 

@@ -81,6 +81,9 @@ class PalworldConfig:
     # load on this server, the write path refuses. Prove it with
     # ``paleditor check-write``, then set this true.
     plz_write_confirmed: bool = False
+    # The game's .pak, read once to learn every item id and what the game
+    # calls it. Left unset it is found by walking up from save_dir.
+    pak_file: Path | None = None
 
     @property
     def level_sav(self) -> Path:
@@ -453,6 +456,9 @@ def from_dict(
         ),
         read_from_backup=bool(pal_raw.get("read_from_backup", True)),
         plz_write_confirmed=bool(pal_raw.get("plz_write_confirmed", False)),
+        pak_file=(
+            Path(pal_raw["pak_file"]).expanduser() if pal_raw.get("pak_file") else None
+        ),
     )
 
     mw_raw = raw.get("maintenance") or {}
